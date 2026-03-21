@@ -1139,7 +1139,7 @@ class MKtransApp:
             hardcoded = next((d for k, l, d in STANDARD_COST_PARAMS if k == key), 0)
             default = saved_defaults.get(key, hardcoded)
             val = saved_costs.get(key, default)
-            var.set(str(val) if val else '0')
+            var.set(self._fmt_input(val) if val else '0')
 
         for f in db.get_fuel(month_id):
             self._add_fuel_row(f)
