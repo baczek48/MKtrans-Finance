@@ -1050,62 +1050,43 @@ class MKtransApp:
 
     @staticmethod
     def _format_money_input(var, entry, callback=None):
-        """Format money input with dots as thousands separators, comma as decimal."""
-        def on_change(*args):
-            val = var.get()
-            # Remove existing dots (thousands separators)
-            clean = val.replace('.', '')
-            # Get cursor position
+        """Format money input: free typing, format with dots on FocusOut."""
+        def on_focus_out(event):
+            val = var.get().strip()
+            if not val:
+                return
+            # Parse current value (handles both Polish and plain format)
+            clean = val.replace('.', '').replace(',', '.')
             try:
-                cursor = entry.index(tk.INSERT)
-            except Exception:
-                cursor = len(val)
-
-            # Count dots before cursor in original
-            dots_before = val[:cursor].count('.')
-
-            # Split on comma (decimal separator)
-            if ',' in clean:
-                integer_part, decimal_part = clean.split(',', 1)
-                decimal_part = decimal_part[:2]  # max 2 decimal digits
+                num = float(clean)
+            except ValueError:
+                return
+            # Re-format with Polish thousands dots
+            if num == int(num) and ',' not in val:
+                formatted = f"{int(num):,}".replace(',', '.')
             else:
-                integer_part = clean
-                decimal_part = None
+                parts = f"{num:,.2f}"
+                parts = parts.replace(',', '.')
+                idx = parts.rfind('.')
+                formatted = parts[:idx] + ',' + parts[idx+1:]
+            if formatted != val:
+                var.set(formatted)
 
-            # Remove non-digit from integer part
-            integer_part = ''.join(c for c in integer_part if c.isdigit())
+        def on_focus_in(event):
+            val = var.get().strip()
+            if not val:
+                return
+            # Strip dots (thousands) so user can edit freely
+            clean = val.replace('.', '')
+            if clean != val:
+                var.set(clean)
+                entry.icursor(len(clean))
 
-            # Add dots as thousands separators
-            if len(integer_part) > 3:
-                groups = []
-                while integer_part:
-                    groups.append(integer_part[-3:])
-                    integer_part = integer_part[:-3]
-                integer_part = '.'.join(reversed(groups))
+        entry.bind('<FocusOut>', on_focus_out, add='+')
+        entry.bind('<FocusIn>', on_focus_in, add='+')
 
-            if decimal_part is not None:
-                new_val = integer_part + ',' + decimal_part
-            else:
-                new_val = integer_part
-
-            if new_val != val:
-                var.trace_remove('write', var._trace_id)
-                var.set(new_val)
-                var._trace_id = var.trace_add('write', on_change)
-                # Adjust cursor for added/removed dots
-                new_dots_before = new_val[:cursor].count('.')
-                new_cursor = cursor + (new_dots_before - dots_before)
-                new_cursor = max(0, min(new_cursor, len(new_val)))
-                try:
-                    entry.icursor(new_cursor)
-                except Exception:
-                    pass
-
-            if callback:
-                callback()
-
-        var._trace_id = var.trace_add('write', on_change)
-        return var._trace_id
+        if callback:
+            var.trace_add('write', lambda *a: callback())
 
     @staticmethod
     def _fmt_input(val):
