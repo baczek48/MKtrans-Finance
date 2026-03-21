@@ -130,17 +130,50 @@ def create_logo(size=512):
     return img
 
 
-def main():
-    # Icon — simple, bold design that looks good even at 16x16
-    master_icon = create_icon(512)
+def _build_ico(images, ico_path):
+    """Build ICO file manually — PNG-compress all frames for max quality."""
+    import struct
+    import io
 
-    sizes = [16, 24, 32, 48, 64, 128, 256]
+    entries = []
+    data_blocks = []
+    offset = 6 + 16 * len(images)  # header + directory entries
+
+    for img in images:
+        # Convert each frame to PNG bytes
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        png_data = buf.getvalue()
+
+        w = img.width if img.width < 256 else 0  # 0 means 256 in ICO spec
+        h = img.height if img.height < 256 else 0
+
+        entries.append(struct.pack('<BBBBHHII',
+                                   w, h, 0, 0, 1, 32,
+                                   len(png_data), offset))
+        data_blocks.append(png_data)
+        offset += len(png_data)
+
+    with open(ico_path, 'wb') as f:
+        # ICO header: reserved=0, type=1 (icon), count
+        f.write(struct.pack('<HHH', 0, 1, len(images)))
+        for entry in entries:
+            f.write(entry)
+        for block in data_blocks:
+            f.write(block)
+
+
+def main():
+    # Icon — simple, bold design readable at any size
+    # Render at 1024px for maximum quality when scaling down
+    master_icon = create_icon(1024)
+
+    sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256]
     icons = [master_icon.resize((s, s), Image.LANCZOS) for s in sizes]
 
     ico_path = os.path.join(DIR, 'icon.ico')
-    icons[0].save(ico_path, format='ICO', sizes=[(s, s) for s in sizes],
-                  append_images=icons[1:])
-    print(f'Saved icon.ico ({len(sizes)} sizes)')
+    _build_ico(icons, ico_path)
+    print(f'Saved icon.ico ({len(sizes)} sizes, PNG-compressed)')
 
     # Logo — detailed version for app header
     master_logo = create_logo(512)
