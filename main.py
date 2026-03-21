@@ -92,7 +92,6 @@ class DatePicker(tk.Frame):
         self._popup.overrideredirect(True)
         self._popup.attributes('-topmost', True)
 
-        # Position below the entry
         x = self._entry.winfo_rootx()
         y = self._entry.winfo_rooty() + self._entry.winfo_height() + 2
         self._popup.geometry(f'+{x}+{y}')
@@ -104,117 +103,139 @@ class DatePicker(tk.Frame):
 
         self._cal_year = self._date.year
         self._cal_month = self._date.month
-        self._build_calendar()
 
-        # Close on click outside
-        self._popup.bind('<FocusOut>', self._on_popup_focus_out)
-        self._popup.focus_set()
+        # Main frame that holds everything
+        self._cal_frame = tk.Frame(self._popup, bg='#1e3a8a', bd=2, relief='solid')
+        self._cal_frame.pack()
 
-    def _on_popup_focus_out(self, event):
-        if self._popup:
-            try:
-                # Check if focus went to a child widget
-                focus = self._popup.focus_get()
-                if focus and str(focus).startswith(str(self._popup)):
-                    return
-            except KeyError:
-                pass
-            self._popup.after(100, self._check_close_popup)
+        # Content frame (rebuilt on navigation)
+        self._cal_content = tk.Frame(self._cal_frame, bg='white')
+        self._cal_content.pack()
 
-    def _check_close_popup(self):
-        if self._popup and self._popup.winfo_exists():
-            try:
-                focus = self._popup.focus_get()
-                if focus and str(focus).startswith(str(self._popup)):
-                    return
-            except (KeyError, tk.TclError):
-                pass
-            self._popup.destroy()
-            self._popup = None
+        self._render_month()
 
-    def _build_calendar(self):
+        # Close popup when clicking anywhere else in the app
+        self._popup.bind('<Escape>', lambda e: self._close_popup())
+        self.winfo_toplevel().bind('<Button-1>', self._on_root_click, add='+')
+
+    def _on_root_click(self, event):
+        """Close popup if click is outside the popup and the picker button."""
         if not self._popup or not self._popup.winfo_exists():
+            self._unbind_root_click()
             return
+        # Check if click is inside popup
+        try:
+            w = event.widget
+            if str(w).startswith(str(self._popup)):
+                return
+            # Check if click is on the dropdown button itself
+            if w == self._btn:
+                return
+        except (tk.TclError, ValueError):
+            pass
+        self._close_popup()
 
-        for w in self._popup.winfo_children():
+    def _unbind_root_click(self):
+        try:
+            self.winfo_toplevel().unbind('<Button-1>')
+        except tk.TclError:
+            pass
+
+    def _close_popup(self):
+        if self._popup and self._popup.winfo_exists():
+            self._popup.destroy()
+        self._popup = None
+        self._unbind_root_click()
+
+    def _render_month(self):
+        """Rebuild just the calendar content for current month/year."""
+        for w in self._cal_content.winfo_children():
             w.destroy()
 
-        frame = tk.Frame(self._popup, bg='#1e3a8a', bd=2, relief='solid')
-        frame.pack()
+        # Navigation: <<  <  [Month Year]  >  >>
+        nav = tk.Frame(self._cal_content, bg='#1e3a8a')
+        nav.grid(row=0, column=0, sticky='ew')
 
-        # Navigation header
-        nav = tk.Frame(frame, bg='#1e3a8a')
-        nav.pack(fill='x', padx=2, pady=2)
+        nav.columnconfigure(0, weight=0)  # <<
+        nav.columnconfigure(1, weight=0)  # <
+        nav.columnconfigure(2, weight=1)  # title (expands)
+        nav.columnconfigure(3, weight=0)  # >
+        nav.columnconfigure(4, weight=0)  # >>
 
-        tk.Button(nav, text='◀◀', font=('Segoe UI', 8, 'bold'), bg='#1e3a8a', fg='white',
-                  bd=0, cursor='hand2', activebackground='#2563eb', activeforeground='white',
-                  command=self._prev_year).pack(side='left', padx=2)
-        tk.Button(nav, text='◀', font=('Segoe UI', 10, 'bold'), bg='#1e3a8a', fg='white',
-                  bd=0, cursor='hand2', activebackground='#2563eb', activeforeground='white',
-                  command=self._prev_month).pack(side='left', padx=2)
+        btn_cfg = dict(font=('Segoe UI', 9, 'bold'), bg='#1e3a8a', fg='white',
+                       bd=0, cursor='hand2', padx=6, pady=4,
+                       activebackground='#3b82f6', activeforeground='white')
+
+        tk.Button(nav, text='<<', command=self._prev_year, **btn_cfg).grid(row=0, column=0, padx=1)
+        tk.Button(nav, text='<', command=self._prev_month, **btn_cfg).grid(row=0, column=1, padx=1)
 
         title = f'{PL_MONTHS[self._cal_month - 1]} {self._cal_year}'
         tk.Label(nav, text=title, bg='#1e3a8a', fg='white',
-                 font=('Segoe UI', 10, 'bold'), width=16, anchor='center').pack(side='left', expand=True)
+                 font=('Segoe UI', 10, 'bold')).grid(row=0, column=2, padx=8)
 
-        tk.Button(nav, text='▶', font=('Segoe UI', 10, 'bold'), bg='#1e3a8a', fg='white',
-                  bd=0, cursor='hand2', activebackground='#2563eb', activeforeground='white',
-                  command=self._next_month).pack(side='right', padx=2)
-        tk.Button(nav, text='▶▶', font=('Segoe UI', 8, 'bold'), bg='#1e3a8a', fg='white',
-                  bd=0, cursor='hand2', activebackground='#2563eb', activeforeground='white',
-                  command=self._next_year).pack(side='right', padx=2)
+        tk.Button(nav, text='>', command=self._next_month, **btn_cfg).grid(row=0, column=3, padx=1)
+        tk.Button(nav, text='>>', command=self._next_year, **btn_cfg).grid(row=0, column=4, padx=1)
 
-        # Day names
-        days_frame = tk.Frame(frame, bg='#e2e8f0')
-        days_frame.pack(fill='x', padx=2)
-        for i, d in enumerate(PL_DAYS):
-            fg = '#dc2626' if i >= 5 else '#475569'
-            tk.Label(days_frame, text=d, bg='#e2e8f0', fg=fg,
+        # Day name headers
+        days_row = tk.Frame(self._cal_content, bg='#e2e8f0')
+        days_row.grid(row=1, column=0, sticky='ew')
+        for i, name in enumerate(PL_DAYS):
+            fg_color = '#dc2626' if i >= 5 else '#475569'
+            tk.Label(days_row, text=name, bg='#e2e8f0', fg=fg_color,
                      font=('Segoe UI', 8, 'bold'), width=4).grid(row=0, column=i, pady=2)
 
         # Days grid
-        grid = tk.Frame(frame, bg='white')
-        grid.pack(padx=2, pady=(0, 2))
+        grid_frame = tk.Frame(self._cal_content, bg='white')
+        grid_frame.grid(row=2, column=0, sticky='ew', padx=1)
 
+        # calendar.monthrange: returns (weekday_of_first_day, number_of_days)
+        # weekday: 0=Monday ... 6=Sunday (Python standard)
         first_weekday, num_days = cal_mod.monthrange(self._cal_year, self._cal_month)
-        today = date.today()
-        selected = self._date
+        today_date = date.today()
+        selected_date = self._date
 
-        row = 0
-        col = first_weekday  # Monday=0
+        # Fill empty cells before first day
+        grid_row = 0
+        for col in range(first_weekday):
+            tk.Label(grid_frame, text='', bg='white', width=3).grid(row=0, column=col, padx=1, pady=1)
 
+        col = first_weekday
         for day in range(1, num_days + 1):
-            d = date(self._cal_year, self._cal_month, day)
-            is_today = d == today
-            is_selected = d == selected
-            is_weekend = col >= 5
+            current_date = date(self._cal_year, self._cal_month, day)
+            is_today = (current_date == today_date)
+            is_selected = (current_date == selected_date)
+            is_weekend = (col >= 5)
 
             if is_selected:
-                bg, fg = '#1a56db', 'white'
+                cell_bg, cell_fg = '#1a56db', 'white'
             elif is_today:
-                bg, fg = '#dbeafe', '#1e3a8a'
+                cell_bg, cell_fg = '#dbeafe', '#1e3a8a'
             elif is_weekend:
-                bg, fg = '#f8fafc', '#475569'
+                cell_bg, cell_fg = '#f8fafc', '#475569'
             else:
-                bg, fg = 'white', '#1a1a2e'
+                cell_bg, cell_fg = 'white', '#1a1a2e'
 
-            btn = tk.Button(grid, text=str(day), width=3, bg=bg, fg=fg,
-                             font=('Segoe UI', 9, 'bold' if is_selected or is_today else ''),
+            font_weight = 'bold' if (is_selected or is_today) else ''
+
+            btn = tk.Button(grid_frame, text=str(day), width=3,
+                             bg=cell_bg, fg=cell_fg,
+                             font=('Segoe UI', 9, font_weight),
                              bd=0, cursor='hand2', activebackground='#93c5fd',
                              command=lambda dd=day: self._select_day(dd))
-            btn.grid(row=row, column=col, padx=1, pady=1)
+            btn.grid(row=grid_row, column=col, padx=1, pady=1)
 
             col += 1
             if col > 6:
                 col = 0
-                row += 1
+                grid_row += 1
 
-        # Today button
-        today_frame = tk.Frame(frame, bg='#f1f5f9')
-        today_frame.pack(fill='x', padx=2, pady=(0, 2))
-        tk.Button(today_frame, text='Dzisiaj', font=('Segoe UI', 8, 'bold'),
-                  bg='#f1f5f9', fg='#1a56db', bd=0, cursor='hand2',
-                  command=self._select_today).pack(pady=2)
+        # "Dzisiaj" button
+        today_btn_frame = tk.Frame(self._cal_content, bg='#f1f5f9')
+        today_btn_frame.grid(row=3, column=0, sticky='ew')
+        tk.Button(today_btn_frame, text=f'Dzisiaj: {today_date.strftime("%Y-%m-%d")}',
+                  font=('Segoe UI', 8, 'bold'), bg='#f1f5f9', fg='#1a56db',
+                  bd=0, cursor='hand2', pady=4,
+                  command=self._select_today).pack(fill='x')
 
     def _prev_month(self):
         if self._cal_month == 1:
@@ -222,7 +243,7 @@ class DatePicker(tk.Frame):
             self._cal_year -= 1
         else:
             self._cal_month -= 1
-        self._build_calendar()
+        self._render_month()
 
     def _next_month(self):
         if self._cal_month == 12:
@@ -230,30 +251,28 @@ class DatePicker(tk.Frame):
             self._cal_year += 1
         else:
             self._cal_month += 1
-        self._build_calendar()
+        self._render_month()
 
     def _prev_year(self):
         self._cal_year -= 1
-        self._build_calendar()
+        self._render_month()
 
     def _next_year(self):
         self._cal_year += 1
-        self._build_calendar()
+        self._render_month()
 
     def _select_day(self, day):
         self._date = date(self._cal_year, self._cal_month, day)
         self._var.set(self._date.strftime('%Y-%m-%d'))
-        if self._popup:
-            self._popup.destroy()
-            self._popup = None
+        self._close_popup()
         if self._on_select:
             self._on_select()
 
     def _select_today(self):
-        today = date.today()
-        self._select_day(today.day)
-        self._cal_year = today.year
-        self._cal_month = today.month
+        today_date = date.today()
+        self._cal_year = today_date.year
+        self._cal_month = today_date.month
+        self._select_day(today_date.day)
 
 # ============================================================
 # CONSTANTS
