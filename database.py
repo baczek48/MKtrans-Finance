@@ -38,8 +38,10 @@ def init_db():
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS cost_defaults (
-            param_key TEXT PRIMARY KEY,
-            value REAL DEFAULT 0
+            param_key TEXT,
+            value REAL DEFAULT 0,
+            effective_from TEXT DEFAULT '0000-00',
+            PRIMARY KEY (param_key, effective_from)
         )
     """)
 
@@ -113,6 +115,11 @@ def init_db():
     if 'name' not in cols:
         c.execute("ALTER TABLE leaves ADD COLUMN name TEXT DEFAULT ''")
 
+    # Migrate: add 'effective_from' column to cost_defaults if missing (old schema had single PK)
+    cd_cols = [row[1] for row in c.execute("PRAGMA table_info(cost_defaults)").fetchall()]
+    if 'effective_from' not in cd_cols:
+        c.execute("ALTER TABLE cost_defaults ADD COLUMN effective_from TEXT DEFAULT '0000-00'")
+
     conn.commit()
     conn.close()
 
@@ -141,20 +148,41 @@ def set_month_accepted(month_id, accepted):
 
 # --- Cost Defaults ---
 
-def get_cost_defaults():
+def get_cost_defaults(month_id=None):
+    """Get cost defaults effective for given month.
+    For each param_key, returns the value from the latest effective_from <= month_id."""
     conn = get_connection()
-    rows = conn.execute("SELECT param_key, value FROM cost_defaults").fetchall()
+    if month_id:
+        rows = conn.execute("""
+            SELECT param_key, value FROM cost_defaults
+            WHERE (param_key, effective_from) IN (
+                SELECT param_key, MAX(effective_from)
+                FROM cost_defaults
+                WHERE effective_from <= ?
+                GROUP BY param_key
+            )
+        """, (month_id,)).fetchall()
+    else:
+        # Fallback: get the latest defaults overall
+        rows = conn.execute("""
+            SELECT param_key, value FROM cost_defaults
+            WHERE (param_key, effective_from) IN (
+                SELECT param_key, MAX(effective_from)
+                FROM cost_defaults
+                GROUP BY param_key
+            )
+        """).fetchall()
     conn.close()
     return {r['param_key']: r['value'] for r in rows}
 
 
-def save_cost_default(param_key, value):
+def save_cost_default(param_key, value, effective_from='0000-00'):
     conn = get_connection()
     conn.execute("""
-        INSERT INTO cost_defaults (param_key, value)
-        VALUES (?, ?)
-        ON CONFLICT(param_key) DO UPDATE SET value = excluded.value
-    """, (param_key, value))
+        INSERT INTO cost_defaults (param_key, value, effective_from)
+        VALUES (?, ?, ?)
+        ON CONFLICT(param_key, effective_from) DO UPDATE SET value = excluded.value
+    """, (param_key, value, effective_from))
     conn.commit()
     conn.close()
 

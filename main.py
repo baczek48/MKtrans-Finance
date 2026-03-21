@@ -515,8 +515,8 @@ class MKtransApp:
                              font=('Segoe UI', 11, 'bold'), fg=PRIMARY_DARK, padx=20, pady=10)
         lf1.pack(fill='x', pady=(0, 16))
 
-        # Load saved defaults from DB
-        saved_defaults = db.get_cost_defaults()
+        # Load saved defaults from DB (for current month)
+        saved_defaults = db.get_cost_defaults(self.current_month)
 
         self.cost_entries = {}
         for key, label, hardcoded_default in STANDARD_COST_PARAMS:
@@ -623,11 +623,13 @@ class MKtransApp:
         self.total_costs_label.pack(anchor='w', pady=(4, 0))
 
     def _save_defaults(self):
+        month_id = self.current_month
         for key, (var, entry) in self.cost_entries.items():
             val = self._safe_float(var.get())
-            db.save_cost_default(key, val)
-        messagebox.showinfo('Kwoty domyślne', 'Zapisano aktualne kwoty jako domyślne.\n'
-                            'Będą używane dla nowych miesięcy.')
+            db.save_cost_default(key, val, effective_from=month_id)
+        messagebox.showinfo('Kwoty domyślne',
+                            f'Zapisano aktualne kwoty jako domyślne\n'
+                            f'od miesiąca {month_id} w górę.')
 
     # ============================================================
     # TAB: URLOP
@@ -1133,7 +1135,7 @@ class MKtransApp:
         self._clear_dynamic_rows()
 
         # Get defaults: DB defaults first, then hardcoded fallback
-        saved_defaults = db.get_cost_defaults()
+        saved_defaults = db.get_cost_defaults(month_id)
         saved_costs = db.get_standard_costs(month_id)
         for key, (var, entry) in self.cost_entries.items():
             hardcoded = next((d for k, l, d in STANDARD_COST_PARAMS if k == key), 0)

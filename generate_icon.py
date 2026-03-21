@@ -117,16 +117,16 @@ def create_logo(size=256):
 
 
 def main():
-    logo = create_logo(256)
+    # Generate at high resolution and scale down for sharp results
+    master = create_logo(512)
+
+    logo = master.resize((256, 256), Image.LANCZOS)
     logo.save(os.path.join(DIR, 'logo.png'))
     print('Saved logo.png (256x256)')
 
-    # Generate .ico with multiple sizes
-    sizes = [16, 32, 48, 64, 128, 256]
-    icons = []
-    for s in sizes:
-        icon = create_logo(s)
-        icons.append(icon)
+    # Generate .ico — all sizes scaled from 512px master
+    sizes = [16, 24, 32, 48, 64, 128, 256]
+    icons = [master.resize((s, s), Image.LANCZOS) for s in sizes]
 
     ico_path = os.path.join(DIR, 'icon.ico')
     icons[0].save(ico_path, format='ICO', sizes=[(s, s) for s in sizes],
@@ -134,7 +134,7 @@ def main():
     print(f'Saved icon.ico ({len(sizes)} sizes)')
 
     # Header logo (smaller, for app header bar)
-    header = create_logo(48)
+    header = master.resize((48, 48), Image.LANCZOS)
     header.save(os.path.join(DIR, 'logo_small.png'))
     print('Saved logo_small.png (48x48)')
 
