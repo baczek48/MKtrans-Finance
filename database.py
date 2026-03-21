@@ -1,10 +1,17 @@
 import sqlite3
 import os
+import sys
 import shutil
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mktrans.db')
-BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
+# When running as PyInstaller exe, use the folder where the exe lives (not temp dir)
+if getattr(sys, 'frozen', False):
+    _BASE_DIR = os.path.dirname(sys.executable)
+else:
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DB_PATH = os.path.join(_BASE_DIR, 'mktrans.db')
+BACKUP_DIR = os.path.join(_BASE_DIR, 'backups')
 
 
 def get_connection():

@@ -7,7 +7,13 @@ import os
 
 import database as db
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+import sys
+if getattr(sys, 'frozen', False):
+    APP_DIR = os.path.dirname(sys.executable)
+    ASSETS_DIR = sys._MEIPASS  # PyInstaller extracts bundled files here
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    ASSETS_DIR = APP_DIR
 
 # ============================================================
 # CUSTOM DATE PICKER (Polish, reliable navigation)
@@ -327,12 +333,12 @@ class MKtransApp:
         self.root.minsize(1100, 750)
 
         # Set window icon
-        ico_path = os.path.join(APP_DIR, 'icon.ico')
+        ico_path = os.path.join(ASSETS_DIR, 'icon.ico')
         if os.path.exists(ico_path):
             self.root.iconbitmap(ico_path)
 
         # Load header logo
-        logo_path = os.path.join(APP_DIR, 'logo_small.png')
+        logo_path = os.path.join(ASSETS_DIR, 'logo_small.png')
         if os.path.exists(logo_path):
             self._logo_img = ImageTk.PhotoImage(Image.open(logo_path).resize((44, 44), Image.LANCZOS))
         else:
