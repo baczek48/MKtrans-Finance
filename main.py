@@ -1,13 +1,259 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime
-from tkcalendar import DateEntry
+from datetime import datetime, date, timedelta
+import calendar as cal_mod
 from PIL import Image, ImageTk
 import os
 
 import database as db
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ============================================================
+# CUSTOM DATE PICKER (Polish, reliable navigation)
+# ============================================================
+
+PL_MONTHS = ['Styczeń', 'Luty', 'Marzec', 'Kwiecień', 'Maj', 'Czerwiec',
+             'Lipiec', 'Sierpień', 'Wrzesień', 'Październik', 'Listopad', 'Grudzień']
+PL_DAYS = ['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'So', 'Nd']
+
+
+class DatePicker(tk.Frame):
+    """Date entry with a popup calendar in Polish."""
+
+    def __init__(self, master, width=12, initial='', on_select=None, **kw):
+        super().__init__(master, bg=kw.get('bg', '#ffffff'))
+        self._on_select = on_select
+        self._date = date.today()
+        self._popup = None
+
+        self._var = tk.StringVar()
+        self._entry = tk.Entry(self, textvariable=self._var, width=width,
+                                font=('Segoe UI', 9), bd=1, relief='solid', justify='center')
+        self._entry.pack(side='left')
+        self._entry.bind('<FocusOut>', self._on_manual_edit)
+        self._entry.bind('<Return>', self._on_manual_edit)
+
+        self._btn = tk.Button(self, text='\u25bc', font=('Segoe UI', 7), bd=1, relief='solid',
+                               bg='#e2e8f0', cursor='hand2', padx=4, pady=0,
+                               command=self._toggle_popup)
+        self._btn.pack(side='left', padx=(1, 0))
+
+        if initial:
+            try:
+                self._date = datetime.strptime(initial, '%Y-%m-%d').date()
+            except (ValueError, TypeError):
+                pass
+        self._var.set(self._date.strftime('%Y-%m-%d'))
+
+    def get(self):
+        return self._var.get()
+
+    def get_date(self):
+        try:
+            return datetime.strptime(self._var.get(), '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            return self._date
+
+    def set_date(self, d):
+        self._date = d
+        self._var.set(d.strftime('%Y-%m-%d'))
+
+    def config(self, **kw):
+        state = kw.get('state')
+        if state is not None:
+            self._entry.config(state=state)
+            self._btn.config(state=state)
+        else:
+            super().config(**kw)
+
+    configure = config
+
+    def _on_manual_edit(self, event=None):
+        try:
+            self._date = datetime.strptime(self._var.get(), '%Y-%m-%d').date()
+            if self._on_select:
+                self._on_select()
+        except (ValueError, TypeError):
+            pass
+
+    def _toggle_popup(self):
+        if self._popup and self._popup.winfo_exists():
+            self._popup.destroy()
+            self._popup = None
+            return
+        self._show_popup()
+
+    def _show_popup(self):
+        if self._popup and self._popup.winfo_exists():
+            self._popup.destroy()
+
+        self._popup = tk.Toplevel(self)
+        self._popup.overrideredirect(True)
+        self._popup.attributes('-topmost', True)
+
+        # Position below the entry
+        x = self._entry.winfo_rootx()
+        y = self._entry.winfo_rooty() + self._entry.winfo_height() + 2
+        self._popup.geometry(f'+{x}+{y}')
+
+        try:
+            self._date = datetime.strptime(self._var.get(), '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            self._date = date.today()
+
+        self._cal_year = self._date.year
+        self._cal_month = self._date.month
+        self._build_calendar()
+
+        # Close on click outside
+        self._popup.bind('<FocusOut>', self._on_popup_focus_out)
+        self._popup.focus_set()
+
+    def _on_popup_focus_out(self, event):
+        if self._popup:
+            try:
+                # Check if focus went to a child widget
+                focus = self._popup.focus_get()
+                if focus and str(focus).startswith(str(self._popup)):
+                    return
+            except KeyError:
+                pass
+            self._popup.after(100, self._check_close_popup)
+
+    def _check_close_popup(self):
+        if self._popup and self._popup.winfo_exists():
+            try:
+                focus = self._popup.focus_get()
+                if focus and str(focus).startswith(str(self._popup)):
+                    return
+            except (KeyError, tk.TclError):
+                pass
+            self._popup.destroy()
+            self._popup = None
+
+    def _build_calendar(self):
+        if not self._popup or not self._popup.winfo_exists():
+            return
+
+        for w in self._popup.winfo_children():
+            w.destroy()
+
+        frame = tk.Frame(self._popup, bg='#1e3a8a', bd=2, relief='solid')
+        frame.pack()
+
+        # Navigation header
+        nav = tk.Frame(frame, bg='#1e3a8a')
+        nav.pack(fill='x', padx=2, pady=2)
+
+        tk.Button(nav, text='◀◀', font=('Segoe UI', 8, 'bold'), bg='#1e3a8a', fg='white',
+                  bd=0, cursor='hand2', activebackground='#2563eb', activeforeground='white',
+                  command=self._prev_year).pack(side='left', padx=2)
+        tk.Button(nav, text='◀', font=('Segoe UI', 10, 'bold'), bg='#1e3a8a', fg='white',
+                  bd=0, cursor='hand2', activebackground='#2563eb', activeforeground='white',
+                  command=self._prev_month).pack(side='left', padx=2)
+
+        title = f'{PL_MONTHS[self._cal_month - 1]} {self._cal_year}'
+        tk.Label(nav, text=title, bg='#1e3a8a', fg='white',
+                 font=('Segoe UI', 10, 'bold'), width=16, anchor='center').pack(side='left', expand=True)
+
+        tk.Button(nav, text='▶', font=('Segoe UI', 10, 'bold'), bg='#1e3a8a', fg='white',
+                  bd=0, cursor='hand2', activebackground='#2563eb', activeforeground='white',
+                  command=self._next_month).pack(side='right', padx=2)
+        tk.Button(nav, text='▶▶', font=('Segoe UI', 8, 'bold'), bg='#1e3a8a', fg='white',
+                  bd=0, cursor='hand2', activebackground='#2563eb', activeforeground='white',
+                  command=self._next_year).pack(side='right', padx=2)
+
+        # Day names
+        days_frame = tk.Frame(frame, bg='#e2e8f0')
+        days_frame.pack(fill='x', padx=2)
+        for i, d in enumerate(PL_DAYS):
+            fg = '#dc2626' if i >= 5 else '#475569'
+            tk.Label(days_frame, text=d, bg='#e2e8f0', fg=fg,
+                     font=('Segoe UI', 8, 'bold'), width=4).grid(row=0, column=i, pady=2)
+
+        # Days grid
+        grid = tk.Frame(frame, bg='white')
+        grid.pack(padx=2, pady=(0, 2))
+
+        first_weekday, num_days = cal_mod.monthrange(self._cal_year, self._cal_month)
+        today = date.today()
+        selected = self._date
+
+        row = 0
+        col = first_weekday  # Monday=0
+
+        for day in range(1, num_days + 1):
+            d = date(self._cal_year, self._cal_month, day)
+            is_today = d == today
+            is_selected = d == selected
+            is_weekend = col >= 5
+
+            if is_selected:
+                bg, fg = '#1a56db', 'white'
+            elif is_today:
+                bg, fg = '#dbeafe', '#1e3a8a'
+            elif is_weekend:
+                bg, fg = '#f8fafc', '#475569'
+            else:
+                bg, fg = 'white', '#1a1a2e'
+
+            btn = tk.Button(grid, text=str(day), width=3, bg=bg, fg=fg,
+                             font=('Segoe UI', 9, 'bold' if is_selected or is_today else ''),
+                             bd=0, cursor='hand2', activebackground='#93c5fd',
+                             command=lambda dd=day: self._select_day(dd))
+            btn.grid(row=row, column=col, padx=1, pady=1)
+
+            col += 1
+            if col > 6:
+                col = 0
+                row += 1
+
+        # Today button
+        today_frame = tk.Frame(frame, bg='#f1f5f9')
+        today_frame.pack(fill='x', padx=2, pady=(0, 2))
+        tk.Button(today_frame, text='Dzisiaj', font=('Segoe UI', 8, 'bold'),
+                  bg='#f1f5f9', fg='#1a56db', bd=0, cursor='hand2',
+                  command=self._select_today).pack(pady=2)
+
+    def _prev_month(self):
+        if self._cal_month == 1:
+            self._cal_month = 12
+            self._cal_year -= 1
+        else:
+            self._cal_month -= 1
+        self._build_calendar()
+
+    def _next_month(self):
+        if self._cal_month == 12:
+            self._cal_month = 1
+            self._cal_year += 1
+        else:
+            self._cal_month += 1
+        self._build_calendar()
+
+    def _prev_year(self):
+        self._cal_year -= 1
+        self._build_calendar()
+
+    def _next_year(self):
+        self._cal_year += 1
+        self._build_calendar()
+
+    def _select_day(self, day):
+        self._date = date(self._cal_year, self._cal_month, day)
+        self._var.set(self._date.strftime('%Y-%m-%d'))
+        if self._popup:
+            self._popup.destroy()
+            self._popup = None
+        if self._on_select:
+            self._on_select()
+
+    def _select_today(self):
+        today = date.today()
+        self._select_day(today.day)
+        self._cal_year = today.year
+        self._cal_month = today.month
 
 # ============================================================
 # CONSTANTS
@@ -110,24 +356,8 @@ class MKtransApp:
     # DATE ENTRY HELPER
     # ============================================================
 
-    def _make_date_entry(self, parent, initial='', width=12):
-        de = DateEntry(parent, width=width, font=('Segoe UI', 9),
-                       date_pattern='yyyy-mm-dd',
-                       background=PRIMARY_DARK, foreground='white',
-                       headersbackground=PRIMARY, headersforeground='white',
-                       selectbackground=PRIMARY, selectforeground='white',
-                       normalbackground='white', normalforeground='black',
-                       weekendbackground='#f8fafc', weekendforeground='black',
-                       othermonthforeground='#d1d5db', othermonthweforeground='#d1d5db',
-                       borderwidth=1, relief='solid',
-                       showothermonthdays=True,
-                       firstweekday='monday')
-        if initial:
-            try:
-                de.set_date(datetime.strptime(initial, '%Y-%m-%d').date())
-            except (ValueError, TypeError):
-                pass
-        return de
+    def _make_date_entry(self, parent, initial='', width=12, on_select=None):
+        return DatePicker(parent, width=width, initial=initial, on_select=on_select)
 
     @staticmethod
     def _configure_table_cols(frame, col_widths):
@@ -593,13 +823,13 @@ class MKtransApp:
         name_e.insert(0, d.get('name', ''))
         name_e.grid(row=0, column=1, padx=3, sticky='w')
 
-        from_e = self._make_date_entry(row, d.get('date_from', ''), width=12)
+        from_e = self._make_date_entry(row, d.get('date_from', ''), width=12,
+                                       on_select=self._recalc_leaves)
         from_e.grid(row=0, column=2, padx=3, sticky='w')
-        from_e.bind('<<DateEntrySelected>>', lambda e: self._recalc_leaves())
 
-        to_e = self._make_date_entry(row, d.get('date_to', ''), width=12)
+        to_e = self._make_date_entry(row, d.get('date_to', ''), width=12,
+                                     on_select=self._recalc_leaves)
         to_e.grid(row=0, column=3, padx=3, sticky='w')
-        to_e.bind('<<DateEntrySelected>>', lambda e: self._recalc_leaves())
 
         days_label = tk.Label(row, text='0', bg=CARD, fg=LABEL_FG,
                                font=('Segoe UI', 10, 'bold'), width=10, anchor='center')
@@ -623,9 +853,9 @@ class MKtransApp:
         row.pack(fill='x', pady=2)
         self._configure_table_cols(row, [w for _, w in INVOICE_COLS])
 
-        date_e = self._make_date_entry(row, d.get('date', ''), width=12)
+        date_e = self._make_date_entry(row, d.get('date', ''), width=12,
+                                       on_select=self._update_invoice_statuses)
         date_e.grid(row=0, column=0, padx=3, sticky='w')
-        date_e.bind('<<DateEntrySelected>>', lambda e: self._update_invoice_statuses())
 
         number_e = tk.Entry(row, width=20, font=('Segoe UI', 9), bd=1, relief='solid')
         number_e.insert(0, d.get('number', ''))
@@ -745,7 +975,6 @@ class MKtransApp:
         self.total_sick_label.config(text=f'Chorobowe razem: {total_sick} dni')
 
     def _update_invoice_statuses(self):
-        from datetime import timedelta, date
         today = date.today()
         PAYMENT_DAYS = 45
 
