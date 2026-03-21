@@ -42,6 +42,16 @@ RED = '#dc2626'
 BORDER = '#e2e8f0'
 LABEL_FG = '#475569'
 
+# Column pixel widths for consistent alignment (header <-> rows)
+FUEL_COLS = [('Data', 130), ('Litry', 100), ('Licznik (km)', 120),
+             ('Kwota netto', 120), ('Kwota brutto', 120), ('', 40)]
+REPAIR_COLS = [('Nr rejestracyjny', 140), ('Data', 130), ('Co zrobione', 200),
+               ('Kwota (PLN)', 120), ('Licznik', 100), ('', 40)]
+LEAVE_COLS = [('Typ', 110), ('Imię i nazwisko', 170), ('Data od', 130),
+              ('Data do', 130), ('Liczba dni', 90), ('', 40)]
+INVOICE_COLS = [('Data', 130), ('Nr faktury', 170), ('Kwota (PLN)', 120),
+                ('Termin', 110), ('Status', 140), ('Zapłacona', 80), ('', 40)]
+
 
 class MKtransApp:
     def __init__(self, root):
@@ -102,17 +112,28 @@ class MKtransApp:
 
     def _make_date_entry(self, parent, initial='', width=12):
         de = DateEntry(parent, width=width, font=('Segoe UI', 9),
-                       date_pattern='yyyy-mm-dd', locale='pl_PL',
+                       date_pattern='yyyy-mm-dd',
                        background=PRIMARY_DARK, foreground='white',
                        headersbackground=PRIMARY, headersforeground='white',
                        selectbackground=PRIMARY, selectforeground='white',
-                       borderwidth=1, relief='solid')
+                       normalbackground='white', normalforeground='black',
+                       weekendbackground='#f8fafc', weekendforeground='black',
+                       othermonthforeground='#d1d5db', othermonthweforeground='#d1d5db',
+                       borderwidth=1, relief='solid',
+                       showothermonthdays=True,
+                       firstweekday='monday')
         if initial:
             try:
                 de.set_date(datetime.strptime(initial, '%Y-%m-%d').date())
             except (ValueError, TypeError):
                 pass
         return de
+
+    @staticmethod
+    def _configure_table_cols(frame, col_widths):
+        """Apply fixed column widths (in pixels) to a frame using grid columnconfigure."""
+        for i, w in enumerate(col_widths):
+            frame.columnconfigure(i, minsize=w)
 
     # ============================================================
     # UI
@@ -286,11 +307,11 @@ class MKtransApp:
 
         fh = tk.Frame(lf2, bg='#f1f5f9')
         fh.pack(fill='x')
-        fuel_cols = [('Data', 16), ('Litry', 12), ('Licznik (km)', 14),
-                     ('Kwota netto', 14), ('Kwota brutto', 14), ('', 5)]
-        for i, (text, w) in enumerate(fuel_cols):
+        col_widths = [w for _, w in FUEL_COLS]
+        self._configure_table_cols(fh, col_widths)
+        for i, (text, _) in enumerate(FUEL_COLS):
             tk.Label(fh, text=text, bg='#f1f5f9', fg=LABEL_FG,
-                     font=('Segoe UI', 8, 'bold'), width=w, anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
+                     font=('Segoe UI', 8, 'bold'), anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
 
         self.fuel_container = tk.Frame(lf2, bg=CARD)
         self.fuel_container.pack(fill='x')
@@ -311,11 +332,11 @@ class MKtransApp:
 
         rh = tk.Frame(lf3, bg='#f1f5f9')
         rh.pack(fill='x')
-        repair_cols = [('Nr rejestracyjny', 16), ('Data', 16), ('Co zrobione', 24),
-                       ('Kwota (PLN)', 14), ('Licznik', 12), ('', 5)]
-        for i, (text, w) in enumerate(repair_cols):
+        col_widths = [w for _, w in REPAIR_COLS]
+        self._configure_table_cols(rh, col_widths)
+        for i, (text, _) in enumerate(REPAIR_COLS):
             tk.Label(rh, text=text, bg='#f1f5f9', fg=LABEL_FG,
-                     font=('Segoe UI', 8, 'bold'), width=w, anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
+                     font=('Segoe UI', 8, 'bold'), anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
 
         self.repair_container = tk.Frame(lf3, bg=CARD)
         self.repair_container.pack(fill='x')
@@ -380,10 +401,11 @@ class MKtransApp:
 
         lh = tk.Frame(card, bg='#f1f5f9')
         lh.pack(fill='x')
-        leave_cols = [('Typ', 12), ('Imię i nazwisko', 20), ('Data od', 14), ('Data do', 14), ('Liczba dni', 10), ('', 5)]
-        for i, (text, w) in enumerate(leave_cols):
+        col_widths = [w for _, w in LEAVE_COLS]
+        self._configure_table_cols(lh, col_widths)
+        for i, (text, _) in enumerate(LEAVE_COLS):
             tk.Label(lh, text=text, bg='#f1f5f9', fg=LABEL_FG,
-                     font=('Segoe UI', 8, 'bold'), width=w, anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
+                     font=('Segoe UI', 8, 'bold'), anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
 
         self.leave_container = tk.Frame(card, bg=CARD)
         self.leave_container.pack(fill='x')
@@ -422,11 +444,11 @@ class MKtransApp:
 
         ih = tk.Frame(card, bg='#f1f5f9')
         ih.pack(fill='x')
-        inv_cols = [('Data', 14), ('Nr faktury', 20), ('Kwota (PLN)', 14),
-                    ('Termin', 12), ('Status', 14), ('Zapłacona', 9), ('', 4)]
-        for i, (text, w) in enumerate(inv_cols):
+        col_widths = [w for _, w in INVOICE_COLS]
+        self._configure_table_cols(ih, col_widths)
+        for i, (text, _) in enumerate(INVOICE_COLS):
             tk.Label(ih, text=text, bg='#f1f5f9', fg=LABEL_FG,
-                     font=('Segoe UI', 8, 'bold'), width=w, anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
+                     font=('Segoe UI', 8, 'bold'), anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
 
         self.invoice_container = tk.Frame(card, bg=CARD)
         self.invoice_container.pack(fill='x')
@@ -484,6 +506,7 @@ class MKtransApp:
         d = data_dict or {}
         row = tk.Frame(self.fuel_container, bg=CARD)
         row.pack(fill='x', pady=2)
+        self._configure_table_cols(row, [w for _, w in FUEL_COLS])
 
         date_e = self._make_date_entry(row, d.get('date', ''), width=14)
         date_e.grid(row=0, column=0, padx=3, sticky='w')
@@ -521,6 +544,7 @@ class MKtransApp:
         d = data_dict or {}
         row = tk.Frame(self.repair_container, bg=CARD)
         row.pack(fill='x', pady=2)
+        self._configure_table_cols(row, [w for _, w in REPAIR_COLS])
 
         plate_e = tk.Entry(row, width=16, font=('Segoe UI', 9), bd=1, relief='solid')
         plate_e.insert(0, d.get('plate', ''))
@@ -558,6 +582,7 @@ class MKtransApp:
         d = data_dict or {}
         row = tk.Frame(self.leave_container, bg=CARD)
         row.pack(fill='x', pady=2)
+        self._configure_table_cols(row, [w for _, w in LEAVE_COLS])
 
         type_var = tk.StringVar(value=d.get('type', 'urlop'))
         type_combo = ttk.Combobox(row, textvariable=type_var, values=['urlop', 'chorobowe'],
@@ -596,6 +621,7 @@ class MKtransApp:
         d = data_dict or {}
         row = tk.Frame(self.invoice_container, bg=CARD)
         row.pack(fill='x', pady=2)
+        self._configure_table_cols(row, [w for _, w in INVOICE_COLS])
 
         date_e = self._make_date_entry(row, d.get('date', ''), width=12)
         date_e.grid(row=0, column=0, padx=3, sticky='w')
