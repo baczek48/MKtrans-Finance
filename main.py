@@ -525,12 +525,12 @@ class MKtransApp:
             row.pack(fill='x', pady=3)
             tk.Label(row, text=label, bg=CARD, fg=LABEL_FG,
                      font=('Segoe UI', 10), width=30, anchor='w').pack(side='left')
-            var = tk.StringVar(value=str(default) if default else '')
+            var = tk.StringVar(value=self._fmt_input(default) if default else '')
             entry = tk.Entry(row, textvariable=var, width=15, font=('Segoe UI', 10),
                              justify='right', bd=1, relief='solid')
             entry.pack(side='left', padx=(8, 0))
             tk.Label(row, text='PLN', bg=CARD, fg='#9ca3af', font=('Segoe UI', 9)).pack(side='left', padx=4)
-            var.trace_add('write', lambda *a: self._recalc())
+            self._format_money_input(var, entry, callback=self._recalc)
             self.cost_entries[key] = (var, entry)
 
         # Button to set current values as new defaults
@@ -624,10 +624,7 @@ class MKtransApp:
 
     def _save_defaults(self):
         for key, (var, entry) in self.cost_entries.items():
-            try:
-                val = float(var.get())
-            except (ValueError, tk.TclError):
-                val = 0
+            val = self._safe_float(var.get())
             db.save_cost_default(key, val)
         messagebox.showinfo('Kwoty domyślne', 'Zapisano aktualne kwoty jako domyślne.\n'
                             'Będą używane dla nowych miesięcy.')
@@ -768,15 +765,17 @@ class MKtransApp:
         odo_e.insert(0, str(d.get('odometer', '')) if d.get('odometer') else '')
         odo_e.grid(row=0, column=2, padx=3, sticky='w')
 
-        netto_var = tk.StringVar(value=str(d.get('netto', '')) if d.get('netto') else '')
+        netto_var = tk.StringVar(value=self._fmt_input(d.get('netto', '')) if d.get('netto') else '')
         netto_e = tk.Entry(row, textvariable=netto_var, width=14, font=('Segoe UI', 9),
                             justify='right', bd=1, relief='solid')
         netto_e.grid(row=0, column=3, padx=3, sticky='w')
-        netto_var.trace_add('write', lambda *a: self._recalc())
+        self._format_money_input(netto_var, netto_e, callback=self._recalc)
 
-        brutto_e = tk.Entry(row, width=14, font=('Segoe UI', 9), justify='right', bd=1, relief='solid')
-        brutto_e.insert(0, str(d.get('brutto', '')) if d.get('brutto') else '')
+        brutto_var = tk.StringVar(value=self._fmt_input(d.get('brutto', '')) if d.get('brutto') else '')
+        brutto_e = tk.Entry(row, textvariable=brutto_var, width=14, font=('Segoe UI', 9),
+                             justify='right', bd=1, relief='solid')
         brutto_e.grid(row=0, column=4, padx=3, sticky='w')
+        self._format_money_input(brutto_var, brutto_e)
 
         del_btn = tk.Button(row, text='X', fg=RED, bg=CARD, bd=0,
                              font=('Segoe UI', 9, 'bold'), cursor='hand2', width=3,
@@ -802,15 +801,18 @@ class MKtransApp:
         date_e = self._make_date_entry(row, d.get('date', ''), width=14)
         date_e.grid(row=0, column=1, padx=3, sticky='w')
 
-        desc_e = tk.Entry(row, width=24, font=('Segoe UI', 9), bd=1, relief='solid')
-        desc_e.insert(0, d.get('description', ''))
-        desc_e.grid(row=0, column=2, padx=3, sticky='w')
+        desc_e = tk.Text(row, width=24, height=1, font=('Segoe UI', 9), bd=1, relief='solid',
+                         wrap='word')
+        desc_e.insert('1.0', d.get('description', ''))
+        desc_e.grid(row=0, column=2, padx=3, sticky='nsew')
+        desc_e.bind('<KeyRelease>', lambda e, t=desc_e: self._auto_resize_text(t))
+        self._auto_resize_text(desc_e)
 
-        amount_var = tk.StringVar(value=str(d.get('amount', '')) if d.get('amount') else '')
+        amount_var = tk.StringVar(value=self._fmt_input(d.get('amount', '')) if d.get('amount') else '')
         amount_e = tk.Entry(row, textvariable=amount_var, width=14, font=('Segoe UI', 9),
                              justify='right', bd=1, relief='solid')
         amount_e.grid(row=0, column=3, padx=3, sticky='w')
-        amount_var.trace_add('write', lambda *a: self._recalc())
+        self._format_money_input(amount_var, amount_e, callback=self._recalc)
 
         odo_e = tk.Entry(row, width=12, font=('Segoe UI', 9), justify='right', bd=1, relief='solid')
         odo_e.insert(0, str(d.get('odometer', '')) if d.get('odometer') else '')
@@ -880,11 +882,11 @@ class MKtransApp:
         number_e.insert(0, d.get('number', ''))
         number_e.grid(row=0, column=1, padx=3, sticky='w')
 
-        amount_var = tk.StringVar(value=str(d.get('amount', '')) if d.get('amount') else '')
+        amount_var = tk.StringVar(value=self._fmt_input(d.get('amount', '')) if d.get('amount') else '')
         amount_e = tk.Entry(row, textvariable=amount_var, width=14, font=('Segoe UI', 9),
                              justify='right', bd=1, relief='solid')
         amount_e.grid(row=0, column=2, padx=3, sticky='w')
-        amount_var.trace_add('write', lambda *a: self._recalc())
+        self._format_money_input(amount_var, amount_e, callback=self._recalc)
 
         # Deadline label
         deadline_label = tk.Label(row, text='-', bg=CARD, fg=LABEL_FG,
@@ -933,31 +935,19 @@ class MKtransApp:
     def _recalc(self):
         total_standard = 0
         for key, (var, entry) in self.cost_entries.items():
-            try:
-                total_standard += float(var.get())
-            except (ValueError, tk.TclError):
-                pass
+            total_standard += self._safe_float(var.get())
 
         total_fuel = 0
         for r in self.fuel_rows:
-            try:
-                total_fuel += float(r['netto'].get())
-            except (ValueError, tk.TclError):
-                pass
+            total_fuel += self._safe_float(r['netto'].get())
 
         total_repairs = 0
         for r in self.repair_rows:
-            try:
-                total_repairs += float(r['amount'].get())
-            except (ValueError, tk.TclError):
-                pass
+            total_repairs += self._safe_float(r['amount'].get())
 
         total_invoices = 0
         for r in self.invoice_rows:
-            try:
-                total_invoices += float(r['amount'].get())
-            except (ValueError, tk.TclError):
-                pass
+            total_invoices += self._safe_float(r['amount'].get())
 
         total_costs = total_standard + total_fuel + total_repairs
         result = total_invoices - total_costs
@@ -1029,9 +1019,122 @@ class MKtransApp:
                 r['deadline_label'].config(text='-', fg=LABEL_FG)
                 r['status_label'].config(text='', bg=CARD)
 
+    def _auto_resize_text(self, widget):
+        """Auto-resize Text widget height based on content."""
+        content = widget.get('1.0', 'end-1c')
+        lines = content.count('\n') + 1
+        # Also account for line wrapping
+        widget.update_idletasks()
+        try:
+            width_chars = widget.cget('width')
+            if len(content) > 0:
+                wrapped_lines = max(lines, (len(content) // max(width_chars, 1)) + 1)
+            else:
+                wrapped_lines = 1
+        except Exception:
+            wrapped_lines = lines
+        new_height = max(1, min(wrapped_lines, 8))
+        widget.config(height=new_height)
+
     def _fmt(self, val):
-        formatted = f"{val:,.2f}".replace(',', ' ').replace('.', ',')
+        formatted = f"{val:,.2f}".replace(',', '.').replace(' ', '').replace('\u00a0', '')
+        # Now formatted looks like "1.234.567,89" — but we need dots as thousands
+        # f"{val:,.2f}" gives "1,234,567.89"
+        # Replace commas with dots (thousands), then dot with comma (decimal)
+        parts = f"{val:,.2f}"
+        parts = parts.replace(',', '.')  # 1.234.567.89
+        # Last dot is decimal separator
+        idx = parts.rfind('.')
+        formatted = parts[:idx] + ',' + parts[idx+1:]
         return f"{formatted} PLN"
+
+    @staticmethod
+    def _format_money_input(var, entry, callback=None):
+        """Format money input with dots as thousands separators, comma as decimal."""
+        def on_change(*args):
+            val = var.get()
+            # Remove existing dots (thousands separators)
+            clean = val.replace('.', '')
+            # Get cursor position
+            try:
+                cursor = entry.index(tk.INSERT)
+            except Exception:
+                cursor = len(val)
+
+            # Count dots before cursor in original
+            dots_before = val[:cursor].count('.')
+
+            # Split on comma (decimal separator)
+            if ',' in clean:
+                integer_part, decimal_part = clean.split(',', 1)
+                decimal_part = decimal_part[:2]  # max 2 decimal digits
+            else:
+                integer_part = clean
+                decimal_part = None
+
+            # Remove non-digit from integer part
+            integer_part = ''.join(c for c in integer_part if c.isdigit())
+
+            # Add dots as thousands separators
+            if len(integer_part) > 3:
+                groups = []
+                while integer_part:
+                    groups.append(integer_part[-3:])
+                    integer_part = integer_part[:-3]
+                integer_part = '.'.join(reversed(groups))
+
+            if decimal_part is not None:
+                new_val = integer_part + ',' + decimal_part
+            else:
+                new_val = integer_part
+
+            if new_val != val:
+                var.trace_remove('write', var._trace_id)
+                var.set(new_val)
+                var._trace_id = var.trace_add('write', on_change)
+                # Adjust cursor for added/removed dots
+                new_dots_before = new_val[:cursor].count('.')
+                new_cursor = cursor + (new_dots_before - dots_before)
+                new_cursor = max(0, min(new_cursor, len(new_val)))
+                try:
+                    entry.icursor(new_cursor)
+                except Exception:
+                    pass
+
+            if callback:
+                callback()
+
+        var._trace_id = var.trace_add('write', on_change)
+        return var._trace_id
+
+    @staticmethod
+    def _fmt_input(val):
+        """Format a number for display in input field (Polish: dots=thousands, comma=decimal)."""
+        try:
+            num = float(val)
+        except (ValueError, TypeError):
+            return str(val) if val else ''
+        if num == 0:
+            return ''
+        if num == int(num):
+            # Integer - format without decimals
+            parts = f"{int(num):,}".replace(',', '.')
+            return parts
+        parts = f"{num:,.2f}"
+        parts = parts.replace(',', '.')
+        idx = parts.rfind('.')
+        return parts[:idx] + ',' + parts[idx+1:]
+
+    @staticmethod
+    def _parse_money(val):
+        """Parse money string with dots as thousands and comma as decimal to float."""
+        if not val:
+            return 0.0
+        try:
+            clean = val.replace('.', '').replace(',', '.')
+            return float(clean)
+        except (ValueError, TypeError):
+            return 0.0
 
     # ============================================================
     # LOAD / SAVE
@@ -1075,10 +1178,7 @@ class MKtransApp:
         month_id = self.current_month
 
         for key, (var, entry) in self.cost_entries.items():
-            try:
-                val = float(var.get())
-            except (ValueError, tk.TclError):
-                val = 0
+            val = self._safe_float(var.get())
             db.save_standard_cost(month_id, key, val)
 
         fuel_data = []
@@ -1097,7 +1197,7 @@ class MKtransApp:
             repair_data.append({
                 'plate': r['plate'].get(),
                 'date': r['date'].get(),
-                'description': r['description'].get(),
+                'description': r['description'].get('1.0', 'end-1c').strip(),
                 'amount': self._safe_float(r['amount'].get()),
                 'odometer': self._safe_int(r['odometer'].get()),
             })
@@ -1170,8 +1270,9 @@ class MKtransApp:
             r['del_btn'].config(state=state)
 
         for r in self.repair_rows:
-            for k in ['plate', 'description', 'amount', 'odometer']:
+            for k in ['plate', 'amount', 'odometer']:
                 r[k].config(state=state)
+            r['description'].config(state=state)
             r['date'].config(state=state)
             r['del_btn'].config(state=state)
 
@@ -1468,11 +1569,11 @@ class MKtransApp:
         desc_e.insert(0, d.get('description', ''))
         desc_e.grid(row=0, column=0, padx=3, sticky='w')
 
-        amount_var = tk.StringVar(value=str(d.get('amount', '')) if d.get('amount') else '')
+        amount_var = tk.StringVar(value=self._fmt_input(d.get('amount', '')) if d.get('amount') else '')
         amount_e = tk.Entry(row, textvariable=amount_var, width=16, font=('Segoe UI', 9),
                              justify='right', bd=1, relief='solid')
         amount_e.grid(row=0, column=1, padx=3, sticky='w')
-        amount_var.trace_add('write', lambda *a: self._recalc_annual())
+        self._format_money_input(amount_var, amount_e, callback=self._recalc_annual)
 
         del_btn = tk.Button(row, text='X', fg=RED, bg=CARD, bd=0,
                              font=('Segoe UI', 9, 'bold'), cursor='hand2', width=3,
@@ -1497,10 +1598,7 @@ class MKtransApp:
         total_ins = 0
         total_tax = 0
         for r in self._stats_annual_rows:
-            try:
-                val = float(r['amount'].get())
-            except (ValueError, tk.TclError):
-                val = 0
+            val = self._safe_float(r['amount'].get())
             if r['type'] == 'ubezpieczenie':
                 total_ins += val
             else:
@@ -1619,9 +1717,12 @@ class MKtransApp:
     # ============================================================
 
     @staticmethod
+    @staticmethod
     def _safe_float(val):
         try:
-            return float(val)
+            # Handle Polish format: dots as thousands, comma as decimal
+            clean = str(val).replace('.', '').replace(',', '.')
+            return float(clean)
         except (ValueError, TypeError):
             return 0.0
 
