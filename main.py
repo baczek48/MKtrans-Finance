@@ -409,14 +409,21 @@ class MKtransApp:
         card = tk.Frame(inner, bg=CARD, bd=1, relief='solid', highlightbackground=BORDER, padx=20, pady=16)
         card.pack(fill='x')
 
-        self.btn_add_invoice = tk.Button(card, text='+ Dodaj fakturę', bg='#e0e7ff', fg=PRIMARY,
+        top_bar = tk.Frame(card, bg=CARD)
+        top_bar.pack(fill='x', pady=(0, 8))
+
+        self.btn_add_invoice = tk.Button(top_bar, text='+ Dodaj fakturę', bg='#e0e7ff', fg=PRIMARY,
                                           font=('Segoe UI', 9, 'bold'), bd=0, padx=12, pady=4,
                                           cursor='hand2', command=self._add_invoice_row)
-        self.btn_add_invoice.pack(anchor='w', pady=(0, 8))
+        self.btn_add_invoice.pack(side='left')
+
+        tk.Label(top_bar, text='Termin płatności: 45 dni od daty faktury', bg=CARD,
+                 fg='#9ca3af', font=('Segoe UI', 8)).pack(side='right')
 
         ih = tk.Frame(card, bg='#f1f5f9')
         ih.pack(fill='x')
-        inv_cols = [('Data', 16), ('Nr faktury', 24), ('Kwota (PLN)', 16), ('', 5)]
+        inv_cols = [('Data', 14), ('Nr faktury', 20), ('Kwota (PLN)', 14),
+                    ('Termin', 12), ('Status', 14), ('Zapłacona', 9), ('', 4)]
         for i, (text, w) in enumerate(inv_cols):
             tk.Label(ih, text=text, bg='#f1f5f9', fg=LABEL_FG,
                      font=('Segoe UI', 8, 'bold'), width=w, anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
@@ -590,29 +597,49 @@ class MKtransApp:
         row = tk.Frame(self.invoice_container, bg=CARD)
         row.pack(fill='x', pady=2)
 
-        date_e = self._make_date_entry(row, d.get('date', ''), width=14)
+        date_e = self._make_date_entry(row, d.get('date', ''), width=12)
         date_e.grid(row=0, column=0, padx=3, sticky='w')
+        date_e.bind('<<DateEntrySelected>>', lambda e: self._update_invoice_statuses())
 
-        number_e = tk.Entry(row, width=24, font=('Segoe UI', 9), bd=1, relief='solid')
+        number_e = tk.Entry(row, width=20, font=('Segoe UI', 9), bd=1, relief='solid')
         number_e.insert(0, d.get('number', ''))
         number_e.grid(row=0, column=1, padx=3, sticky='w')
 
         amount_var = tk.StringVar(value=str(d.get('amount', '')) if d.get('amount') else '')
-        amount_e = tk.Entry(row, textvariable=amount_var, width=16, font=('Segoe UI', 9),
+        amount_e = tk.Entry(row, textvariable=amount_var, width=14, font=('Segoe UI', 9),
                              justify='right', bd=1, relief='solid')
         amount_e.grid(row=0, column=2, padx=3, sticky='w')
         amount_var.trace_add('write', lambda *a: self._recalc())
 
+        # Deadline label
+        deadline_label = tk.Label(row, text='-', bg=CARD, fg=LABEL_FG,
+                                   font=('Segoe UI', 8), width=12, anchor='w')
+        deadline_label.grid(row=0, column=3, padx=3, sticky='w')
+
+        # Status label (colored)
+        status_label = tk.Label(row, text='', bg=CARD, fg=LABEL_FG,
+                                 font=('Segoe UI', 8, 'bold'), width=14, anchor='w')
+        status_label.grid(row=0, column=4, padx=3, sticky='w')
+
+        # Paid checkbox
+        paid_var = tk.IntVar(value=1 if d.get('paid') else 0)
+        paid_cb = tk.Checkbutton(row, variable=paid_var, bg=CARD, activebackground=CARD,
+                                  command=self._update_invoice_statuses)
+        paid_cb.grid(row=0, column=5, padx=3, sticky='w')
+
         del_btn = tk.Button(row, text='X', fg=RED, bg=CARD, bd=0,
                              font=('Segoe UI', 9, 'bold'), cursor='hand2', width=3,
                              command=lambda r=row: self._delete_row(r, self.invoice_rows))
-        del_btn.grid(row=0, column=3, padx=3, sticky='w')
+        del_btn.grid(row=0, column=6, padx=3, sticky='w')
 
         self.invoice_rows.append({
             'frame': row, 'date': date_e, 'number': number_e,
-            'amount': amount_e, 'amount_var': amount_var, 'del_btn': del_btn,
+            'amount': amount_e, 'amount_var': amount_var,
+            'deadline_label': deadline_label, 'status_label': status_label,
+            'paid_var': paid_var, 'paid_cb': paid_cb, 'del_btn': del_btn,
         })
         self._recalc()
+        self._update_invoice_statuses()
 
     def _delete_row(self, frame, row_list, callback=None):
         for i, r in enumerate(row_list):
@@ -690,6 +717,43 @@ class MKtransApp:
                     total_sick += days
         self.total_vacation_label.config(text=f'Urlop razem: {total_vac} dni')
         self.total_sick_label.config(text=f'Chorobowe razem: {total_sick} dni')
+
+    def _update_invoice_statuses(self):
+        from datetime import timedelta, date
+        today = date.today()
+        PAYMENT_DAYS = 45
+
+        for r in self.invoice_rows:
+            try:
+                inv_date = r['date'].get_date()
+                deadline = inv_date + timedelta(days=PAYMENT_DAYS)
+                deadline_str = deadline.strftime('%Y-%m-%d')
+                r['deadline_label'].config(text=deadline_str)
+
+                if r['paid_var'].get():
+                    r['status_label'].config(text='Zapłacona', fg=GREEN, bg='#f0fdf4')
+                    r['deadline_label'].config(fg='#9ca3af')
+                else:
+                    days_left = (deadline - today).days
+                    if days_left < 0:
+                        r['status_label'].config(
+                            text=f'Po terminie ({-days_left}d)', fg='white', bg=RED)
+                        r['deadline_label'].config(fg=RED)
+                    elif days_left <= 7:
+                        r['status_label'].config(
+                            text=f'Pilne! ({days_left}d)', fg='white', bg='#d97706')
+                        r['deadline_label'].config(fg='#d97706')
+                    elif days_left <= 14:
+                        r['status_label'].config(
+                            text=f'Zbliża się ({days_left}d)', fg='#92400e', bg='#fef3c7')
+                        r['deadline_label'].config(fg='#92400e')
+                    else:
+                        r['status_label'].config(
+                            text=f'OK ({days_left}d)', fg=GREEN, bg=CARD)
+                        r['deadline_label'].config(fg=LABEL_FG)
+            except Exception:
+                r['deadline_label'].config(text='-', fg=LABEL_FG)
+                r['status_label'].config(text='', bg=CARD)
 
     def _fmt(self, val):
         formatted = f"{val:,.2f}".replace(',', ' ').replace('.', ',')
@@ -781,6 +845,7 @@ class MKtransApp:
                 'date': r['date'].get(),
                 'number': r['number'].get(),
                 'amount': self._safe_float(r['amount'].get()),
+                'paid': r['paid_var'].get(),
             })
         db.save_invoices(month_id, invoice_data)
 
@@ -847,6 +912,7 @@ class MKtransApp:
             for k in ['number', 'amount']:
                 r[k].config(state=state)
             r['date'].config(state=state)
+            r['paid_cb'].config(state=state)
             r['del_btn'].config(state=state)
 
         btn_state = 'disabled' if state == 'disabled' else 'normal'

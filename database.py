@@ -88,9 +88,15 @@ def init_db():
             date TEXT,
             number TEXT,
             amount REAL,
+            paid INTEGER DEFAULT 0,
             FOREIGN KEY (month_id) REFERENCES months(id)
         )
     """)
+
+    # Migrate: add 'paid' column to invoices if missing
+    inv_cols = [row[1] for row in c.execute("PRAGMA table_info(invoices)").fetchall()]
+    if 'paid' not in inv_cols:
+        c.execute("ALTER TABLE invoices ADD COLUMN paid INTEGER DEFAULT 0")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS annual_costs (
@@ -251,8 +257,8 @@ def save_invoices(month_id, entries):
     conn.execute("DELETE FROM invoices WHERE month_id = ?", (month_id,))
     for e in entries:
         conn.execute(
-            "INSERT INTO invoices (month_id, date, number, amount) VALUES (?,?,?,?)",
-            (month_id, e['date'], e['number'], e['amount'])
+            "INSERT INTO invoices (month_id, date, number, amount, paid) VALUES (?,?,?,?,?)",
+            (month_id, e['date'], e['number'], e['amount'], 1 if e.get('paid') else 0)
         )
     conn.commit()
     conn.close()
