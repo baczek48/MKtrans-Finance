@@ -2,8 +2,12 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
 from tkcalendar import DateEntry
+from PIL import Image, ImageTk
+import os
 
 import database as db
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ============================================================
 # CONSTANTS
@@ -46,6 +50,18 @@ class MKtransApp:
         self.root.geometry("1440x960")
         self.root.configure(bg=BG)
         self.root.minsize(1100, 750)
+
+        # Set window icon
+        ico_path = os.path.join(APP_DIR, 'icon.ico')
+        if os.path.exists(ico_path):
+            self.root.iconbitmap(ico_path)
+
+        # Load header logo
+        logo_path = os.path.join(APP_DIR, 'logo_small.png')
+        if os.path.exists(logo_path):
+            self._logo_img = ImageTk.PhotoImage(Image.open(logo_path).resize((44, 44), Image.LANCZOS))
+        else:
+            self._logo_img = None
 
         db.init_db()
         db.create_backup()
@@ -114,11 +130,15 @@ class MKtransApp:
         left = tk.Frame(hinner, bg=PRIMARY_DARK)
         left.pack(side='left')
 
-        logo = tk.Canvas(left, width=44, height=44, bg=PRIMARY_DARK, highlightthickness=0)
-        logo.pack(side='left', padx=(0, 12))
-        logo.create_rectangle(2, 2, 42, 42, fill=PRIMARY, outline='')
-        logo.create_text(22, 16, text='MK', fill='white', font=('Segoe UI', 12, 'bold'))
-        logo.create_text(22, 32, text='trans', fill='#fbbf24', font=('Segoe UI', 8, 'bold'))
+        if self._logo_img:
+            logo_label = tk.Label(left, image=self._logo_img, bg=PRIMARY_DARK)
+            logo_label.pack(side='left', padx=(0, 12))
+        else:
+            logo = tk.Canvas(left, width=44, height=44, bg=PRIMARY_DARK, highlightthickness=0)
+            logo.pack(side='left', padx=(0, 12))
+            logo.create_rectangle(2, 2, 42, 42, fill=PRIMARY, outline='')
+            logo.create_text(22, 16, text='MK', fill='white', font=('Segoe UI', 12, 'bold'))
+            logo.create_text(22, 32, text='trans', fill='#fbbf24', font=('Segoe UI', 8, 'bold'))
 
         tf = tk.Frame(left, bg=PRIMARY_DARK)
         tf.pack(side='left')
