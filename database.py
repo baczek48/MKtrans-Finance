@@ -56,11 +56,34 @@ def init_db():
         CREATE TABLE IF NOT EXISTS fuel (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             month_id TEXT,
+            plate TEXT DEFAULT '',
             date TEXT,
             liters REAL,
             odometer INTEGER,
             netto REAL,
             brutto REAL,
+            FOREIGN KEY (month_id) REFERENCES months(id)
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS fuel_plates (
+            plate TEXT PRIMARY KEY
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS employees (
+            name TEXT PRIMARY KEY
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS other_costs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            month_id TEXT,
+            description TEXT DEFAULT '',
+            amount REAL DEFAULT 0,
             FOREIGN KEY (month_id) REFERENCES months(id)
         )
     """)
@@ -126,6 +149,17 @@ def init_db():
     cd_cols = [row[1] for row in c.execute("PRAGMA table_info(cost_defaults)").fetchall()]
     if 'effective_from' not in cd_cols:
         c.execute("ALTER TABLE cost_defaults ADD COLUMN effective_from TEXT DEFAULT '0000-00'")
+
+    # Migrate: add 'plate' column to fuel if missing
+    fuel_cols = [row[1] for row in c.execute("PRAGMA table_info(fuel)").fetchall()]
+    if 'plate' not in fuel_cols:
+        c.execute("ALTER TABLE fuel ADD COLUMN plate TEXT DEFAULT ''")
+
+    # Seed default plates if fuel_plates table is empty
+    plate_count = c.execute("SELECT COUNT(*) FROM fuel_plates").fetchone()[0]
+    if plate_count == 0:
+        for p in ['PNT7966A', 'PNTMR28']:
+            c.execute("INSERT OR IGNORE INTO fuel_plates (plate) VALUES (?)", (p,))
 
     conn.commit()
     conn.close()
@@ -229,8 +263,148 @@ def save_fuel(month_id, entries):
     conn.execute("DELETE FROM fuel WHERE month_id = ?", (month_id,))
     for e in entries:
         conn.execute(
-            "INSERT INTO fuel (month_id, date, liters, odometer, netto, brutto) VALUES (?,?,?,?,?,?)",
-            (month_id, e['date'], e['liters'], e['odometer'], e['netto'], e['brutto'])
+            "INSERT INTO fuel (month_id, plate, date, liters, odometer, netto, brutto) VALUES (?,?,?,?,?,?,?)",
+            (month_id, e.get('plate', ''), e['date'], e['liters'], e['odometer'], e['netto'], e['brutto'])
+        )
+    conn.commit()
+    conn.close()
+
+
+# --- Fuel Plates ---
+
+def get_fuel_plates():
+    conn = get_connection()
+    rows = conn.execute("SELECT plate FROM fuel_plates ORDER BY plate").fetchall()
+    conn.close()
+    return [r['plate'] for r in rows]
+
+
+def add_fuel_plate(plate):
+    conn = get_connection()
+    conn.execute("INSERT OR IGNORE INTO fuel_plates (plate) VALUES (?)", (plate,))
+    conn.commit()
+    conn.close()
+
+
+def remove_fuel_plate(plate):
+    conn = get_connection()
+    conn.execute("DELETE FROM fuel_plates WHERE plate = ?", (plate,))
+    conn.commit()
+    conn.close()
+
+
+def get_fuel_stats_for_year(year, plate=None):
+    """Get monthly fuel statistics for a given year, optionally filtered by plate."""
+    conn = get_connection()
+    results = {}
+    for m in range(1, 13):
+        month_id = f"{year}-{m:02d}"
+        if plate:
+            rows = conn.execute(
+                "SELECT * FROM fuel WHERE month_id = ? AND plate = ? ORDER BY date",
+                (month_id, plate)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM fuel WHERE month_id = ? ORDER BY date",
+                (month_id,)).fetchall()
+        entries = [dict(r) for r in rows]
+
+        total_liters = sum(e['liters'] or 0 for e in entries)
+        total_netto = sum(e['netto'] or 0 for e in entries)
+        total_brutto = sum(e['brutto'] or 0 for e in entries)
+
+        # Calculate km driven: max odometer - min odometer in that month
+        odometers = [e['odometer'] for e in entries if e['odometer'] and e['odometer'] > 0]
+        if len(odometers) >= 2:
+            km_driven = max(odometers) - min(odometers)
+        else:
+            km_driven = 0
+
+        # Average consumption: liters / (km / 100)
+        if km_driven > 0 and total_liters > 0:
+            avg_consumption = (total_liters / km_driven) * 100
+        else:
+            avg_consumption = 0
+
+        results[m] = {
+            'entries': len(entries),
+            'total_liters': total_liters,
+            'km_driven': km_driven,
+            'total_netto': total_netto,
+            'total_brutto': total_brutto,
+            'avg_consumption': avg_consumption,
+        }
+    conn.close()
+    return results
+
+
+def get_repair_stats_for_year(year, plate=None):
+    """Get monthly repair statistics for a given year, optionally filtered by plate."""
+    conn = get_connection()
+    results = {}
+    for m in range(1, 13):
+        month_id = f"{year}-{m:02d}"
+        if plate:
+            rows = conn.execute(
+                "SELECT * FROM repairs WHERE month_id = ? AND plate = ? ORDER BY date",
+                (month_id, plate)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM repairs WHERE month_id = ? ORDER BY date",
+                (month_id,)).fetchall()
+        entries = [dict(r) for r in rows]
+
+        total_amount = sum(e['amount'] or 0 for e in entries)
+        descriptions = [e.get('description', '') for e in entries if e.get('description', '').strip()]
+
+        results[m] = {
+            'count': len(entries),
+            'total_amount': total_amount,
+            'descriptions': descriptions,
+        }
+    conn.close()
+    return results
+
+
+# --- Employees ---
+
+def get_employees():
+    conn = get_connection()
+    rows = conn.execute("SELECT name FROM employees ORDER BY name").fetchall()
+    conn.close()
+    return [r['name'] for r in rows]
+
+
+def add_employee(name):
+    conn = get_connection()
+    conn.execute("INSERT OR IGNORE INTO employees (name) VALUES (?)", (name,))
+    conn.commit()
+    conn.close()
+
+
+def remove_employee(name):
+    conn = get_connection()
+    conn.execute("DELETE FROM employees WHERE name = ?", (name,))
+    conn.commit()
+    conn.close()
+
+
+# --- Other Costs ---
+
+def get_other_costs(month_id):
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM other_costs WHERE month_id = ? ORDER BY id", (month_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def save_other_costs(month_id, entries):
+    conn = get_connection()
+    conn.execute("DELETE FROM other_costs WHERE month_id = ?", (month_id,))
+    for e in entries:
+        conn.execute(
+            "INSERT INTO other_costs (month_id, description, amount) VALUES (?,?,?)",
+            (month_id, e.get('description', ''), e.get('amount', 0))
         )
     conn.commit()
     conn.close()
@@ -371,30 +545,41 @@ def get_month_summary(month_id):
     repairs = get_repairs(month_id)
     total_repairs = sum(r['amount'] or 0 for r in repairs)
 
+    other = get_other_costs(month_id)
+    total_other = sum(o['amount'] or 0 for o in other)
+
     invoices = get_invoices(month_id)
     total_invoices = sum(i['amount'] or 0 for i in invoices)
 
     leaves = get_leaves(month_id)
     urlop_days = 0
     chorobowe_days = 0
+    urlop_by_person = {}
+    chorobowe_by_person = {}
     for l in leaves:
         days = _calc_days(l['date_from'], l['date_to'])
+        name = l.get('name', '') or 'Nieprzypisane'
         if l['type'] == 'urlop':
             urlop_days += days
+            urlop_by_person[name] = urlop_by_person.get(name, 0) + days
         else:
             chorobowe_days += days
+            chorobowe_by_person[name] = chorobowe_by_person.get(name, 0) + days
 
-    total_costs = total_standard + total_fuel_netto + total_repairs
+    total_costs = total_standard + total_fuel_netto + total_repairs + total_other
     result = total_invoices - total_costs
 
     return {
         'standard': total_standard,
         'fuel_netto': total_fuel_netto,
         'repairs': total_repairs,
+        'other': total_other,
         'total_costs': total_costs,
         'invoices': total_invoices,
         'urlop_days': urlop_days,
         'chorobowe_days': chorobowe_days,
+        'urlop_by_person': urlop_by_person,
+        'chorobowe_by_person': chorobowe_by_person,
         'result': result,
     }
 

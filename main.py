@@ -314,7 +314,7 @@ BORDER = '#e2e8f0'
 LABEL_FG = '#475569'
 
 # Column pixel widths for consistent alignment (header <-> rows)
-FUEL_COLS = [('Data', 130), ('Litry', 100), ('Licznik (km)', 120),
+FUEL_COLS = [('Nr rej.', 130), ('Data', 130), ('Litry', 100), ('Licznik (km)', 120),
              ('Kwota netto', 120), ('Kwota brutto', 120), ('', 40)]
 REPAIR_COLS = [('Nr rejestracyjny', 140), ('Data', 130), ('Co zrobione', 200),
                ('Kwota (PLN)', 120), ('Licznik', 100), ('', 40)]
@@ -355,6 +355,7 @@ class MKtransApp:
         self.repair_rows = []
         self.leave_rows = []
         self.invoice_rows = []
+        self.other_cost_rows = []
 
         self._build_styles()
         self._build_ui()
@@ -555,10 +556,36 @@ class MKtransApp:
                              font=('Segoe UI', 11, 'bold'), fg=PRIMARY_DARK, padx=20, pady=10)
         lf2.pack(fill='x', pady=(0, 16))
 
-        self.btn_add_fuel = tk.Button(lf2, text='+ Dodaj wpis', bg='#e0e7ff', fg=PRIMARY,
+        # Top bar: add fuel + plate management
+        fuel_top = tk.Frame(lf2, bg=CARD)
+        fuel_top.pack(fill='x', pady=(0, 8))
+
+        self.btn_add_fuel = tk.Button(fuel_top, text='+ Dodaj wpis', bg='#e0e7ff', fg=PRIMARY,
                                        font=('Segoe UI', 9, 'bold'), bd=0, padx=12, pady=4,
                                        cursor='hand2', command=self._add_fuel_row)
-        self.btn_add_fuel.pack(anchor='w', pady=(0, 8))
+        self.btn_add_fuel.pack(side='left')
+
+        # Plate management (right side)
+        plate_mgmt = tk.Frame(fuel_top, bg=CARD)
+        plate_mgmt.pack(side='right')
+
+        tk.Label(plate_mgmt, text='Zarządzaj nr rej.:', bg=CARD, fg=LABEL_FG,
+                 font=('Segoe UI', 8)).pack(side='left', padx=(0, 4))
+
+        self._new_plate_var = tk.StringVar()
+        self._new_plate_entry = tk.Entry(plate_mgmt, textvariable=self._new_plate_var, width=12,
+                                          font=('Segoe UI', 9), bd=1, relief='solid')
+        self._new_plate_entry.pack(side='left', padx=2)
+
+        self.btn_add_plate = tk.Button(plate_mgmt, text='+ Dodaj', bg='#d1fae5', fg=GREEN,
+                                        font=('Segoe UI', 8, 'bold'), bd=0, padx=8, pady=2,
+                                        cursor='hand2', command=self._add_fuel_plate)
+        self.btn_add_plate.pack(side='left', padx=2)
+
+        self.btn_remove_plate = tk.Button(plate_mgmt, text='- Usuń', bg='#fee2e2', fg=RED,
+                                           font=('Segoe UI', 8, 'bold'), bd=0, padx=8, pady=2,
+                                           cursor='hand2', command=self._remove_fuel_plate)
+        self.btn_remove_plate.pack(side='left', padx=2)
 
         fh = tk.Frame(lf2, bg='#f1f5f9')
         fh.pack(fill='x')
@@ -600,6 +627,32 @@ class MKtransApp:
                                           fg=LABEL_FG, font=('Segoe UI', 10), anchor='e')
         self.repair_sum_label.pack(fill='x', pady=(8, 0))
 
+        # --- Podsekcja: Koszty inne ---
+        OTHER_COST_COLS = [('Koszt', 300), ('Kwota (PLN)', 150), ('', 40)]
+        lf4 = tk.LabelFrame(main, text='  Koszty inne  ', bg=CARD,
+                             font=('Segoe UI', 11, 'bold'), fg=PRIMARY_DARK, padx=20, pady=10)
+        lf4.pack(fill='x', pady=(0, 16))
+
+        self.btn_add_other_cost = tk.Button(lf4, text='+ Dodaj koszt', bg='#e0e7ff', fg=PRIMARY,
+                                             font=('Segoe UI', 9, 'bold'), bd=0, padx=12, pady=4,
+                                             cursor='hand2', command=self._add_other_cost_row)
+        self.btn_add_other_cost.pack(anchor='w', pady=(0, 8))
+
+        och = tk.Frame(lf4, bg='#f1f5f9')
+        och.pack(fill='x')
+        oc_widths = [w for _, w in OTHER_COST_COLS]
+        self._configure_table_cols(och, oc_widths)
+        for i, (text, _) in enumerate(OTHER_COST_COLS):
+            tk.Label(och, text=text, bg='#f1f5f9', fg=LABEL_FG,
+                     font=('Segoe UI', 8, 'bold'), anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
+
+        self.other_cost_container = tk.Frame(lf4, bg=CARD)
+        self.other_cost_container.pack(fill='x')
+
+        self.other_cost_sum_label = tk.Label(lf4, text='Suma kosztów innych: 0,00 PLN', bg=CARD,
+                                              fg=LABEL_FG, font=('Segoe UI', 10), anchor='e')
+        self.other_cost_sum_label.pack(fill='x', pady=(8, 0))
+
         # --- Podsumowanie kosztow ---
         sep = tk.Frame(main, bg=PRIMARY, height=3)
         sep.pack(fill='x', pady=(8, 0))
@@ -622,7 +675,10 @@ class MKtransApp:
         self.total_fuel_label.pack(side='left', padx=(0, 28))
         self.total_repairs_label = tk.Label(breakdown, text='Naprawy: 0,00 PLN',
                                              bg=CARD, fg=LABEL_FG, font=('Segoe UI', 10))
-        self.total_repairs_label.pack(side='left')
+        self.total_repairs_label.pack(side='left', padx=(0, 28))
+        self.total_other_label = tk.Label(breakdown, text='Inne: 0,00 PLN',
+                                           bg=CARD, fg=LABEL_FG, font=('Segoe UI', 10))
+        self.total_other_label.pack(side='left')
 
         self.total_costs_label = tk.Label(totals, text='RAZEM: 0,00 PLN', bg=CARD,
                                            fg=RED, font=('Segoe UI', 13, 'bold'))
@@ -648,10 +704,35 @@ class MKtransApp:
         card = tk.Frame(inner, bg=CARD, bd=1, relief='solid', highlightbackground=BORDER, padx=20, pady=16)
         card.pack(fill='x')
 
-        self.btn_add_leave = tk.Button(card, text='+ Dodaj wpis', bg='#e0e7ff', fg=PRIMARY,
+        top_bar = tk.Frame(card, bg=CARD)
+        top_bar.pack(fill='x', pady=(0, 8))
+
+        self.btn_add_leave = tk.Button(top_bar, text='+ Dodaj wpis', bg='#e0e7ff', fg=PRIMARY,
                                         font=('Segoe UI', 9, 'bold'), bd=0, padx=12, pady=4,
                                         cursor='hand2', command=self._add_leave_row)
-        self.btn_add_leave.pack(anchor='w', pady=(0, 8))
+        self.btn_add_leave.pack(side='left')
+
+        # Employee management
+        emp_mgmt = tk.Frame(top_bar, bg=CARD)
+        emp_mgmt.pack(side='right')
+
+        tk.Label(emp_mgmt, text='Zarządzaj osobami:', bg=CARD, fg=LABEL_FG,
+                 font=('Segoe UI', 8)).pack(side='left', padx=(0, 4))
+
+        self._new_emp_var = tk.StringVar()
+        self._new_emp_entry = tk.Entry(emp_mgmt, textvariable=self._new_emp_var, width=16,
+                                        font=('Segoe UI', 9), bd=1, relief='solid')
+        self._new_emp_entry.pack(side='left', padx=2)
+
+        self.btn_add_emp = tk.Button(emp_mgmt, text='+ Dodaj', bg='#d1fae5', fg=GREEN,
+                                      font=('Segoe UI', 8, 'bold'), bd=0, padx=8, pady=2,
+                                      cursor='hand2', command=self._add_employee)
+        self.btn_add_emp.pack(side='left', padx=2)
+
+        self.btn_remove_emp = tk.Button(emp_mgmt, text='- Usuń', bg='#fee2e2', fg=RED,
+                                         font=('Segoe UI', 8, 'bold'), bd=0, padx=8, pady=2,
+                                         cursor='hand2', command=self._remove_employee)
+        self.btn_remove_emp.pack(side='left', padx=2)
 
         lh = tk.Frame(card, bg='#f1f5f9')
         lh.pack(fill='x')
@@ -762,36 +843,43 @@ class MKtransApp:
         row.pack(fill='x', pady=2)
         self._configure_table_cols(row, [w for _, w in FUEL_COLS])
 
+        plates = db.get_fuel_plates()
+        plate_var = tk.StringVar(value=d.get('plate', ''))
+        plate_combo = ttk.Combobox(row, textvariable=plate_var, values=plates,
+                                    width=14, font=('Segoe UI', 9))
+        plate_combo.grid(row=0, column=0, padx=3, sticky='w')
+
         date_e = self._make_date_entry(row, d.get('date', ''), width=14)
-        date_e.grid(row=0, column=0, padx=3, sticky='w')
+        date_e.grid(row=0, column=1, padx=3, sticky='w')
 
         liters_e = tk.Entry(row, width=12, font=('Segoe UI', 9), justify='right', bd=1, relief='solid')
         liters_e.insert(0, str(d.get('liters', '')) if d.get('liters') else '')
-        liters_e.grid(row=0, column=1, padx=3, sticky='w')
+        liters_e.grid(row=0, column=2, padx=3, sticky='w')
 
         odo_e = tk.Entry(row, width=14, font=('Segoe UI', 9), justify='right', bd=1, relief='solid')
         odo_e.insert(0, str(d.get('odometer', '')) if d.get('odometer') else '')
-        odo_e.grid(row=0, column=2, padx=3, sticky='w')
+        odo_e.grid(row=0, column=3, padx=3, sticky='w')
 
         netto_var = tk.StringVar(value=self._fmt_input(d.get('netto', '')) if d.get('netto') else '')
         netto_e = tk.Entry(row, textvariable=netto_var, width=14, font=('Segoe UI', 9),
                             justify='right', bd=1, relief='solid')
-        netto_e.grid(row=0, column=3, padx=3, sticky='w')
+        netto_e.grid(row=0, column=4, padx=3, sticky='w')
         self._format_money_input(netto_var, netto_e, callback=self._recalc)
 
         brutto_var = tk.StringVar(value=self._fmt_input(d.get('brutto', '')) if d.get('brutto') else '')
         brutto_e = tk.Entry(row, textvariable=brutto_var, width=14, font=('Segoe UI', 9),
                              justify='right', bd=1, relief='solid')
-        brutto_e.grid(row=0, column=4, padx=3, sticky='w')
+        brutto_e.grid(row=0, column=5, padx=3, sticky='w')
         self._format_money_input(brutto_var, brutto_e)
 
         del_btn = tk.Button(row, text='X', fg=RED, bg=CARD, bd=0,
                              font=('Segoe UI', 9, 'bold'), cursor='hand2', width=3,
                              command=lambda r=row: self._delete_row(r, self.fuel_rows))
-        del_btn.grid(row=0, column=5, padx=3, sticky='w')
+        del_btn.grid(row=0, column=6, padx=3, sticky='w')
 
         self.fuel_rows.append({
-            'frame': row, 'date': date_e, 'liters': liters_e, 'odometer': odo_e,
+            'frame': row, 'plate': plate_combo, 'plate_var': plate_var,
+            'date': date_e, 'liters': liters_e, 'odometer': odo_e,
             'netto': netto_e, 'netto_var': netto_var, 'brutto': brutto_e, 'del_btn': del_btn,
         })
         self._recalc()
@@ -802,8 +890,10 @@ class MKtransApp:
         row.pack(fill='x', pady=2)
         self._configure_table_cols(row, [w for _, w in REPAIR_COLS])
 
-        plate_e = tk.Entry(row, width=16, font=('Segoe UI', 9), bd=1, relief='solid')
-        plate_e.insert(0, d.get('plate', ''))
+        plates = db.get_fuel_plates()
+        plate_var = tk.StringVar(value=d.get('plate', ''))
+        plate_e = ttk.Combobox(row, textvariable=plate_var, values=plates,
+                                width=14, font=('Segoe UI', 9))
         plate_e.grid(row=0, column=0, padx=3, sticky='w')
 
         date_e = self._make_date_entry(row, d.get('date', ''), width=14)
@@ -832,7 +922,7 @@ class MKtransApp:
         del_btn.grid(row=0, column=5, padx=3, sticky='w')
 
         self.repair_rows.append({
-            'frame': row, 'plate': plate_e, 'date': date_e, 'description': desc_e,
+            'frame': row, 'plate': plate_e, 'plate_var': plate_var, 'date': date_e, 'description': desc_e,
             'amount': amount_e, 'amount_var': amount_var, 'odometer': odo_e, 'del_btn': del_btn,
         })
         self._recalc()
@@ -848,8 +938,10 @@ class MKtransApp:
                                    state='readonly', width=10, font=('Segoe UI', 9))
         type_combo.grid(row=0, column=0, padx=3, sticky='w')
 
-        name_e = tk.Entry(row, width=20, font=('Segoe UI', 9), bd=1, relief='solid')
-        name_e.insert(0, d.get('name', ''))
+        employees = db.get_employees()
+        name_var = tk.StringVar(value=d.get('name', ''))
+        name_e = ttk.Combobox(row, textvariable=name_var, values=employees,
+                               width=18, font=('Segoe UI', 9))
         name_e.grid(row=0, column=1, padx=3, sticky='w')
 
         from_e = self._make_date_entry(row, d.get('date_from', ''), width=12,
@@ -871,7 +963,7 @@ class MKtransApp:
 
         self.leave_rows.append({
             'frame': row, 'type': type_var, 'type_combo': type_combo,
-            'name': name_e,
+            'name': name_var, 'name_combo': name_e,
             'date_from': from_e, 'date_to': to_e, 'days_label': days_label, 'del_btn': del_btn,
         })
         self._recalc_leaves()
@@ -926,6 +1018,34 @@ class MKtransApp:
         self._recalc()
         self._update_invoice_statuses()
 
+    def _add_other_cost_row(self, data_dict=None):
+        d = data_dict or {}
+        OTHER_COST_COLS = [('Koszt', 300), ('Kwota (PLN)', 150), ('', 40)]
+        row = tk.Frame(self.other_cost_container, bg=CARD)
+        row.pack(fill='x', pady=2)
+        self._configure_table_cols(row, [w for _, w in OTHER_COST_COLS])
+
+        desc_e = tk.Entry(row, width=40, font=('Segoe UI', 9), bd=1, relief='solid')
+        desc_e.insert(0, d.get('description', ''))
+        desc_e.grid(row=0, column=0, padx=3, sticky='w')
+
+        amount_var = tk.StringVar(value=self._fmt_input(d.get('amount', '')) if d.get('amount') else '')
+        amount_e = tk.Entry(row, textvariable=amount_var, width=16, font=('Segoe UI', 9),
+                             justify='right', bd=1, relief='solid')
+        amount_e.grid(row=0, column=1, padx=3, sticky='w')
+        self._format_money_input(amount_var, amount_e, callback=self._recalc)
+
+        del_btn = tk.Button(row, text='X', fg=RED, bg=CARD, bd=0,
+                             font=('Segoe UI', 9, 'bold'), cursor='hand2', width=3,
+                             command=lambda r=row: self._delete_row(r, self.other_cost_rows))
+        del_btn.grid(row=0, column=2, padx=3, sticky='w')
+
+        self.other_cost_rows.append({
+            'frame': row, 'description': desc_e,
+            'amount': amount_e, 'amount_var': amount_var, 'del_btn': del_btn,
+        })
+        self._recalc()
+
     def _delete_row(self, frame, row_list, callback=None):
         for i, r in enumerate(row_list):
             if r['frame'] == frame:
@@ -953,18 +1073,24 @@ class MKtransApp:
         for r in self.repair_rows:
             total_repairs += self._safe_float(r['amount'].get())
 
+        total_other = 0
+        for r in self.other_cost_rows:
+            total_other += self._safe_float(r['amount'].get())
+
         total_invoices = 0
         for r in self.invoice_rows:
             total_invoices += self._safe_float(r['amount'].get())
 
-        total_costs = total_standard + total_fuel + total_repairs
+        total_costs = total_standard + total_fuel + total_repairs + total_other
         result = total_invoices - total_costs
 
         self.fuel_netto_label.config(text=f'Suma netto paliwa: {self._fmt(total_fuel)}')
         self.repair_sum_label.config(text=f'Suma napraw: {self._fmt(total_repairs)}')
+        self.other_cost_sum_label.config(text=f'Suma kosztów innych: {self._fmt(total_other)}')
         self.total_standard_label.config(text=f'Koszty standardowe: {self._fmt(total_standard)}')
         self.total_fuel_label.config(text=f'Paliwo (netto): {self._fmt(total_fuel)}')
         self.total_repairs_label.config(text=f'Naprawy: {self._fmt(total_repairs)}')
+        self.total_other_label.config(text=f'Inne: {self._fmt(total_other)}')
         self.total_costs_label.config(text=f'RAZEM: {self._fmt(total_costs)}')
         self.total_invoices_label.config(text=f'Suma faktur: {self._fmt(total_invoices)}')
         self.summary_invoices_label.config(text=self._fmt(total_invoices))
@@ -1155,6 +1281,8 @@ class MKtransApp:
             self._add_repair_row(r)
         for l in db.get_leaves(month_id):
             self._add_leave_row(l)
+        for oc in db.get_other_costs(month_id):
+            self._add_other_cost_row(oc)
         for inv in db.get_invoices(month_id):
             self._add_invoice_row(inv)
 
@@ -1173,8 +1301,9 @@ class MKtransApp:
         fuel_data = []
         for r in self.fuel_rows:
             fuel_data.append({
+                'plate': r['plate_var'].get(),
                 'date': r['date'].get(),
-                'liters': self._safe_float(r['liters'].get()),
+                'liters': self._safe_float_plain(r['liters'].get()),
                 'odometer': self._safe_int(r['odometer'].get()),
                 'netto': self._safe_float(r['netto'].get()),
                 'brutto': self._safe_float(r['brutto'].get()),
@@ -1184,7 +1313,7 @@ class MKtransApp:
         repair_data = []
         for r in self.repair_rows:
             repair_data.append({
-                'plate': r['plate'].get(),
+                'plate': r['plate_var'].get(),
                 'date': r['date'].get(),
                 'description': r['description'].get('1.0', 'end-1c').strip(),
                 'amount': self._safe_float(r['amount'].get()),
@@ -1202,6 +1331,14 @@ class MKtransApp:
             })
         db.save_leaves(month_id, leave_data)
 
+        other_cost_data = []
+        for r in self.other_cost_rows:
+            other_cost_data.append({
+                'description': r['description'].get(),
+                'amount': self._safe_float(r['amount'].get()),
+            })
+        db.save_other_costs(month_id, other_cost_data)
+
         invoice_data = []
         for r in self.invoice_rows:
             invoice_data.append({
@@ -1213,7 +1350,7 @@ class MKtransApp:
         db.save_invoices(month_id, invoice_data)
 
     def _clear_dynamic_rows(self):
-        for lst in [self.fuel_rows, self.repair_rows, self.leave_rows, self.invoice_rows]:
+        for lst in [self.fuel_rows, self.repair_rows, self.leave_rows, self.other_cost_rows, self.invoice_rows]:
             for r in lst:
                 r['frame'].destroy()
             lst.clear()
@@ -1255,21 +1392,28 @@ class MKtransApp:
         for r in self.fuel_rows:
             for k in ['liters', 'odometer', 'netto', 'brutto']:
                 r[k].config(state=state)
+            r['plate'].config(state='disabled' if state == 'disabled' else 'normal')
             r['date'].config(state=state)
             r['del_btn'].config(state=state)
 
         for r in self.repair_rows:
-            for k in ['plate', 'amount', 'odometer']:
+            for k in ['amount', 'odometer']:
                 r[k].config(state=state)
+            r['plate'].config(state='disabled' if state == 'disabled' else 'normal')
             r['description'].config(state=state)
             r['date'].config(state=state)
             r['del_btn'].config(state=state)
 
         for r in self.leave_rows:
-            r['name'].config(state=state)
+            r['name_combo'].config(state='disabled' if state == 'disabled' else 'normal')
             r['date_from'].config(state=state)
             r['date_to'].config(state=state)
             r['type_combo'].config(state='disabled' if state == 'disabled' else 'readonly')
+            r['del_btn'].config(state=state)
+
+        for r in self.other_cost_rows:
+            r['description'].config(state=state)
+            r['amount'].config(state=state)
             r['del_btn'].config(state=state)
 
         for r in self.invoice_rows:
@@ -1281,8 +1425,12 @@ class MKtransApp:
 
         btn_state = 'disabled' if state == 'disabled' else 'normal'
         for btn in [self.btn_add_fuel, self.btn_add_repair, self.btn_add_leave,
-                    self.btn_add_invoice, self.btn_set_defaults]:
+                    self.btn_add_invoice, self.btn_set_defaults, self.btn_add_other_cost,
+                    self.btn_add_plate, self.btn_remove_plate,
+                    self.btn_add_emp, self.btn_remove_emp]:
             btn.config(state=btn_state)
+        self._new_plate_entry.config(state=state)
+        self._new_emp_entry.config(state=state)
 
     # ============================================================
     # STATISTICS
@@ -1343,7 +1491,15 @@ class MKtransApp:
         self._stats_tab_annual = tk.Frame(self._stats_notebook, bg=BG)
         self._stats_notebook.add(self._stats_tab_annual, text='  Koszty roczne  ')
 
-        # Tab 3: Podsumowanie roku
+        # Tab 3: Paliwa
+        self._stats_tab_fuel = tk.Frame(self._stats_notebook, bg=BG)
+        self._stats_notebook.add(self._stats_tab_fuel, text='  Paliwa  ')
+
+        # Tab 4: Naprawy
+        self._stats_tab_repairs = tk.Frame(self._stats_notebook, bg=BG)
+        self._stats_notebook.add(self._stats_tab_repairs, text='  Naprawy  ')
+
+        # Tab 5: Podsumowanie roku (last)
         self._stats_tab_yearly = tk.Frame(self._stats_notebook, bg=BG)
         self._stats_notebook.add(self._stats_tab_yearly, text='  Podsumowanie roku  ')
 
@@ -1353,6 +1509,8 @@ class MKtransApp:
         year = int(self._stats_year_var.get())
         self._build_stats_monthly_table(year)
         self._build_stats_annual_costs(year)
+        self._build_stats_fuel(year)
+        self._build_stats_repairs(year)
         self._build_stats_yearly_summary(year)
 
     # --- Stats Tab 1: Monthly table ---
@@ -1378,7 +1536,7 @@ class MKtransApp:
         canvas.pack(side='left', fill='both', expand=True)
 
         categories = [
-            'Koszty standardowe', 'Paliwo (netto)', 'Naprawy',
+            'Koszty standardowe', 'Paliwo (netto)', 'Naprawy', 'Koszty inne',
             'KOSZTY MIESIĘCZNE', 'Faktury', 'Urlop (dni)', 'Chorobowe (dni)', 'WYNIK MIESIĄCA'
         ]
 
@@ -1420,6 +1578,7 @@ class MKtransApp:
                     'Koszty standardowe': s['standard'],
                     'Paliwo (netto)': s['fuel_netto'],
                     'Naprawy': s['repairs'],
+                    'Koszty inne': s['other'],
                     'KOSZTY MIESIĘCZNE': s['total_costs'],
                     'Faktury': s['invoices'],
                     'Urlop (dni)': s['urlop_days'],
@@ -1627,8 +1786,11 @@ class MKtransApp:
         yearly_standard = 0
         yearly_fuel = 0
         yearly_repairs = 0
+        yearly_other = 0
         yearly_urlop = 0
         yearly_chorobowe = 0
+        yearly_urlop_by_person = {}
+        yearly_chorobowe_by_person = {}
 
         for m in range(1, 13):
             month_id = f"{year}-{m:02d}"
@@ -1637,10 +1799,15 @@ class MKtransApp:
             yearly_standard += s['standard']
             yearly_fuel += s['fuel_netto']
             yearly_repairs += s['repairs']
+            yearly_other += s['other']
             yearly_urlop += s['urlop_days']
             yearly_chorobowe += s['chorobowe_days']
+            for name, days in s['urlop_by_person'].items():
+                yearly_urlop_by_person[name] = yearly_urlop_by_person.get(name, 0) + days
+            for name, days in s['chorobowe_by_person'].items():
+                yearly_chorobowe_by_person[name] = yearly_chorobowe_by_person.get(name, 0) + days
 
-        yearly_monthly_costs = yearly_standard + yearly_fuel + yearly_repairs
+        yearly_monthly_costs = yearly_standard + yearly_fuel + yearly_repairs + yearly_other
         annual_total = db.get_annual_costs_total(year)
         yearly_total_costs = yearly_monthly_costs + annual_total
         yearly_result = yearly_invoices - yearly_total_costs
@@ -1657,6 +1824,7 @@ class MKtransApp:
             ('Koszty standardowe (suma)', self._fmt(yearly_standard), LABEL_FG, False),
             ('Paliwo netto (suma)', self._fmt(yearly_fuel), LABEL_FG, False),
             ('Naprawy (suma)', self._fmt(yearly_repairs), LABEL_FG, False),
+            ('Koszty inne (suma)', self._fmt(yearly_other), LABEL_FG, False),
             ('Razem koszty miesięczne', self._fmt(yearly_monthly_costs), RED, False),
             ('', '', '', False),
             ('KOSZTY ROCZNE', '', '', True),
@@ -1699,18 +1867,369 @@ class MKtransApp:
         leave_frame.pack(fill='x')
         tk.Label(leave_frame, text=f'Urlop w {year}: {yearly_urlop} dni    |    '
                  f'Chorobowe w {year}: {yearly_chorobowe} dni',
-                 bg=CARD, fg=LABEL_FG, font=('Segoe UI', 10)).pack(anchor='w')
+                 bg=CARD, fg=LABEL_FG, font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(0, 6))
+
+        # Per-person breakdown
+        all_persons = sorted(set(list(yearly_urlop_by_person.keys()) + list(yearly_chorobowe_by_person.keys())))
+        if all_persons:
+            for person in all_persons:
+                u_days = yearly_urlop_by_person.get(person, 0)
+                c_days = yearly_chorobowe_by_person.get(person, 0)
+                parts = []
+                if u_days > 0:
+                    parts.append(f'urlop: {u_days} dni')
+                if c_days > 0:
+                    parts.append(f'chorobowe: {c_days} dni')
+                tk.Label(leave_frame, text=f'  {person}: {", ".join(parts)}',
+                         bg=CARD, fg=LABEL_FG, font=('Segoe UI', 9)).pack(anchor='w')
+
+    # ============================================================
+    # STATS TAB 5: REPAIR STATISTICS
+    # ============================================================
+
+    def _build_stats_repairs(self, year):
+        for w in self._stats_tab_repairs.winfo_children():
+            w.destroy()
+
+        main = tk.Frame(self._stats_tab_repairs, bg=BG, padx=24, pady=16)
+        main.pack(fill='both', expand=True)
+
+        # Header with plate selector
+        top = tk.Frame(main, bg=BG)
+        top.pack(fill='x', pady=(0, 12))
+
+        tk.Label(top, text=f'Statystyki napraw - {year}', bg=BG, fg=PRIMARY_DARK,
+                 font=('Segoe UI', 13, 'bold')).pack(side='left')
+
+        plate_frame = tk.Frame(top, bg=BG)
+        plate_frame.pack(side='right')
+
+        tk.Label(plate_frame, text='Pojazd:', bg=BG, fg=LABEL_FG,
+                 font=('Segoe UI', 10)).pack(side='left', padx=(0, 6))
+
+        plates = db.get_fuel_plates()
+        all_options = ['Wszystkie'] + plates
+        prev_selection = getattr(self, '_stats_repair_plate_var', None)
+        prev_value = prev_selection.get() if prev_selection else 'Wszystkie'
+        if prev_value not in all_options:
+            prev_value = 'Wszystkie'
+        self._stats_repair_plate_var = tk.StringVar(value=prev_value)
+        plate_combo = ttk.Combobox(plate_frame, textvariable=self._stats_repair_plate_var,
+                                    values=all_options, state='readonly', width=16,
+                                    font=('Segoe UI', 10))
+        plate_combo.pack(side='left')
+        plate_combo.bind('<<ComboboxSelected>>', lambda e: self._build_stats_repairs(
+            int(self._stats_year_var.get())))
+
+        # Get repair stats
+        selected_plate = self._stats_repair_plate_var.get()
+        plate_filter = None if selected_plate == 'Wszystkie' else selected_plate
+        stats = db.get_repair_stats_for_year(year, plate_filter)
+
+        # Build table
+        frame = tk.Frame(main, bg=BG)
+        frame.pack(fill='x', pady=(0, 12))
+
+        canvas = tk.Canvas(frame, bg=CARD, highlightthickness=0)
+        h_scroll = ttk.Scrollbar(frame, orient='horizontal', command=canvas.xview)
+        v_scroll = ttk.Scrollbar(frame, orient='vertical', command=canvas.yview)
+
+        inner = tk.Frame(canvas, bg=CARD)
+        inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=inner, anchor='nw')
+        canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+
+        v_scroll.pack(side='right', fill='y')
+        h_scroll.pack(side='bottom', fill='x')
+        canvas.pack(side='left', fill='both', expand=True)
+
+        categories = ['Naprawy (szt.)', 'Suma kosztów']
+
+        # Header row
+        tk.Label(inner, text='Kategoria', bg='#e2e8f0', fg=PRIMARY_DARK,
+                 font=('Segoe UI', 9, 'bold'), width=22, anchor='w', padx=8, pady=8,
+                 relief='ridge').grid(row=0, column=0, sticky='nsew')
+
+        for m in range(1, 13):
+            tk.Label(inner, text=MONTHS_PL[m - 1][:3], bg='#e2e8f0', fg=PRIMARY_DARK,
+                     font=('Segoe UI', 9, 'bold'), width=13, anchor='center', padx=4, pady=8,
+                     relief='ridge').grid(row=0, column=m, sticky='nsew')
+
+        tk.Label(inner, text='SUMA', bg=PRIMARY_DARK, fg='white',
+                 font=('Segoe UI', 9, 'bold'), width=14, anchor='center', padx=4, pady=8,
+                 relief='ridge').grid(row=0, column=13, sticky='nsew')
+
+        for i, cat in enumerate(categories):
+            bg_color = '#f8fafc' if i % 2 == 0 else CARD
+
+            tk.Label(inner, text=cat, bg=bg_color, fg=LABEL_FG,
+                     font=('Segoe UI', 9), width=22, anchor='w', padx=8, pady=5,
+                     relief='ridge').grid(row=i + 1, column=0, sticky='nsew')
+
+            year_sum = 0
+            for m in range(1, 13):
+                s = stats[m]
+                val = s['count'] if cat == 'Naprawy (szt.)' else s['total_amount']
+                year_sum += val
+
+                if cat == 'Naprawy (szt.)':
+                    text = str(int(val)) if val else '-'
+                else:
+                    text = self._fmt(val) if val else '-'
+
+                fg = RED if cat == 'Suma kosztów' and val > 0 else LABEL_FG
+
+                tk.Label(inner, text=text, bg=bg_color, fg=fg,
+                         font=('Segoe UI', 9), width=13, anchor='e', padx=6, pady=5,
+                         relief='ridge').grid(row=i + 1, column=m, sticky='nsew')
+
+            if cat == 'Naprawy (szt.)':
+                sum_text = str(int(year_sum))
+            else:
+                sum_text = self._fmt(year_sum)
+
+            tk.Label(inner, text=sum_text, bg='#f1f5f9', fg=LABEL_FG,
+                     font=('Segoe UI', 9, 'bold'), width=14, anchor='e', padx=6, pady=5,
+                     relief='ridge').grid(row=i + 1, column=13, sticky='nsew')
+
+        # Detailed list of repairs per month
+        detail_frame = tk.Frame(main, bg=CARD, bd=1, relief='solid', highlightbackground=BORDER, padx=20, pady=12)
+        detail_frame.pack(fill='both', expand=True, pady=(0, 0))
+
+        tk.Label(detail_frame, text='Szczegóły napraw', bg=CARD, fg=PRIMARY_DARK,
+                 font=('Segoe UI', 11, 'bold')).pack(anchor='w', pady=(0, 8))
+
+        has_any = False
+        for m in range(1, 13):
+            s = stats[m]
+            if s['count'] > 0:
+                has_any = True
+                month_label = f"{MONTHS_PL[m - 1]}: {s['count']} napraw(y) - {self._fmt(s['total_amount'])}"
+                tk.Label(detail_frame, text=month_label, bg=CARD, fg=PRIMARY_DARK,
+                         font=('Segoe UI', 9, 'bold')).pack(anchor='w', pady=(4, 0))
+                for desc in s['descriptions']:
+                    tk.Label(detail_frame, text=f'  - {desc}', bg=CARD, fg=LABEL_FG,
+                             font=('Segoe UI', 9)).pack(anchor='w')
+
+        if not has_any:
+            tk.Label(detail_frame, text='Brak napraw w wybranym roku', bg=CARD, fg=LABEL_FG,
+                     font=('Segoe UI', 9)).pack(anchor='w')
+
+    # ============================================================
+    # FUEL PLATE MANAGEMENT
+    # ============================================================
+
+    def _add_fuel_plate(self):
+        plate = self._new_plate_var.get().strip().upper()
+        if not plate:
+            return
+        db.add_fuel_plate(plate)
+        self._new_plate_var.set('')
+        self._refresh_fuel_plate_combos()
+
+    def _remove_fuel_plate(self):
+        plate = self._new_plate_var.get().strip().upper()
+        if not plate:
+            return
+        db.remove_fuel_plate(plate)
+        self._new_plate_var.set('')
+        self._refresh_fuel_plate_combos()
+
+    def _refresh_fuel_plate_combos(self):
+        plates = db.get_fuel_plates()
+        for r in self.fuel_rows:
+            r['plate']['values'] = plates
+        for r in self.repair_rows:
+            r['plate']['values'] = plates
+
+    # ============================================================
+    # EMPLOYEE MANAGEMENT
+    # ============================================================
+
+    def _add_employee(self):
+        name = self._new_emp_var.get().strip()
+        if not name:
+            return
+        db.add_employee(name)
+        self._new_emp_var.set('')
+        self._refresh_employee_combos()
+
+    def _remove_employee(self):
+        name = self._new_emp_var.get().strip()
+        if not name:
+            return
+        db.remove_employee(name)
+        self._new_emp_var.set('')
+        self._refresh_employee_combos()
+
+    def _refresh_employee_combos(self):
+        employees = db.get_employees()
+        for r in self.leave_rows:
+            r['name_combo']['values'] = employees
+
+    # ============================================================
+    # STATS TAB 4: FUEL STATISTICS
+    # ============================================================
+
+    def _build_stats_fuel(self, year):
+        for w in self._stats_tab_fuel.winfo_children():
+            w.destroy()
+
+        main = tk.Frame(self._stats_tab_fuel, bg=BG, padx=24, pady=16)
+        main.pack(fill='both', expand=True)
+
+        # Header with plate selector
+        top = tk.Frame(main, bg=BG)
+        top.pack(fill='x', pady=(0, 12))
+
+        tk.Label(top, text=f'Statystyki paliwa - {year}', bg=BG, fg=PRIMARY_DARK,
+                 font=('Segoe UI', 13, 'bold')).pack(side='left')
+
+        plate_frame = tk.Frame(top, bg=BG)
+        plate_frame.pack(side='right')
+
+        tk.Label(plate_frame, text='Pojazd:', bg=BG, fg=LABEL_FG,
+                 font=('Segoe UI', 10)).pack(side='left', padx=(0, 6))
+
+        plates = db.get_fuel_plates()
+        all_options = ['Wszystkie'] + plates
+        # Preserve previous selection if it exists
+        prev_selection = getattr(self, '_stats_fuel_plate_var', None)
+        prev_value = prev_selection.get() if prev_selection else 'Wszystkie'
+        if prev_value not in all_options:
+            prev_value = 'Wszystkie'
+        self._stats_fuel_plate_var = tk.StringVar(value=prev_value)
+        plate_combo = ttk.Combobox(plate_frame, textvariable=self._stats_fuel_plate_var,
+                                    values=all_options, state='readonly', width=16,
+                                    font=('Segoe UI', 10))
+        plate_combo.pack(side='left')
+        plate_combo.bind('<<ComboboxSelected>>', lambda e: self._build_stats_fuel(
+            int(self._stats_year_var.get())))
+
+        # Get fuel stats
+        selected_plate = self._stats_fuel_plate_var.get()
+        plate_filter = None if selected_plate == 'Wszystkie' else selected_plate
+        stats = db.get_fuel_stats_for_year(year, plate_filter)
+
+        # Build table
+        frame = tk.Frame(main, bg=BG)
+        frame.pack(fill='both', expand=True)
+
+        canvas = tk.Canvas(frame, bg=CARD, highlightthickness=0)
+        h_scroll = ttk.Scrollbar(frame, orient='horizontal', command=canvas.xview)
+        v_scroll = ttk.Scrollbar(frame, orient='vertical', command=canvas.yview)
+
+        inner = tk.Frame(canvas, bg=CARD)
+        inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=inner, anchor='nw')
+        canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+
+        v_scroll.pack(side='right', fill='y')
+        h_scroll.pack(side='bottom', fill='x')
+        canvas.pack(side='left', fill='both', expand=True)
+
+        categories = [
+            'Tankowania (szt.)',
+            'Litry (suma)',
+            'Kilometry',
+            'Śr. spalanie (l/100km)',
+            'Suma netto',
+            'Suma brutto',
+        ]
+
+        # Header row
+        tk.Label(inner, text='Kategoria', bg='#e2e8f0', fg=PRIMARY_DARK,
+                 font=('Segoe UI', 9, 'bold'), width=22, anchor='w', padx=8, pady=8,
+                 relief='ridge').grid(row=0, column=0, sticky='nsew')
+
+        for m in range(1, 13):
+            tk.Label(inner, text=MONTHS_PL[m - 1][:3], bg='#e2e8f0', fg=PRIMARY_DARK,
+                     font=('Segoe UI', 9, 'bold'), width=13, anchor='center', padx=4, pady=8,
+                     relief='ridge').grid(row=0, column=m, sticky='nsew')
+
+        tk.Label(inner, text='SUMA/ŚR.', bg=PRIMARY_DARK, fg='white',
+                 font=('Segoe UI', 9, 'bold'), width=14, anchor='center', padx=4, pady=8,
+                 relief='ridge').grid(row=0, column=13, sticky='nsew')
+
+        # Data rows
+        for i, cat in enumerate(categories):
+            bg_color = '#f8fafc' if i % 2 == 0 else CARD
+
+            tk.Label(inner, text=cat, bg=bg_color, fg=LABEL_FG,
+                     font=('Segoe UI', 9), width=22, anchor='w', padx=8, pady=5,
+                     relief='ridge').grid(row=i + 1, column=0, sticky='nsew')
+
+            year_sum = 0
+            year_total_liters = 0
+            year_total_km = 0
+
+            for m in range(1, 13):
+                s = stats[m]
+                val_map = {
+                    'Tankowania (szt.)': s['entries'],
+                    'Litry (suma)': s['total_liters'],
+                    'Kilometry': s['km_driven'],
+                    'Śr. spalanie (l/100km)': s['avg_consumption'],
+                    'Suma netto': s['total_netto'],
+                    'Suma brutto': s['total_brutto'],
+                }
+                val = val_map[cat]
+
+                if cat == 'Śr. spalanie (l/100km)':
+                    year_total_liters += s['total_liters']
+                    year_total_km += s['km_driven']
+                    text = f"{val:.1f}" if val > 0 else '-'
+                elif cat == 'Tankowania (szt.)' or cat == 'Kilometry':
+                    text = str(int(val)) if val else '-'
+                    year_sum += val
+                elif cat == 'Litry (suma)':
+                    text = f"{val:.1f}" if val else '-'
+                    year_sum += val
+                else:
+                    text = self._fmt(val) if val else '-'
+                    year_sum += val
+
+                fg = LABEL_FG
+                if cat in ('Suma netto', 'Suma brutto') and val > 0:
+                    fg = RED
+
+                tk.Label(inner, text=text, bg=bg_color, fg=fg,
+                         font=('Segoe UI', 9), width=13, anchor='e', padx=6, pady=5,
+                         relief='ridge').grid(row=i + 1, column=m, sticky='nsew')
+
+            # SUMA column
+            if cat == 'Śr. spalanie (l/100km)':
+                avg = (year_total_liters / year_total_km) * 100 if year_total_km > 0 else 0
+                sum_text = f"{avg:.1f}" if avg > 0 else '-'
+            elif cat == 'Tankowania (szt.)' or cat == 'Kilometry':
+                sum_text = str(int(year_sum))
+            elif cat == 'Litry (suma)':
+                sum_text = f"{year_sum:.1f}"
+            else:
+                sum_text = self._fmt(year_sum)
+
+            tk.Label(inner, text=sum_text, bg='#f1f5f9', fg=LABEL_FG,
+                     font=('Segoe UI', 9, 'bold'), width=14, anchor='e', padx=6, pady=5,
+                     relief='ridge').grid(row=i + 1, column=13, sticky='nsew')
 
     # ============================================================
     # HELPERS
     # ============================================================
 
     @staticmethod
-    @staticmethod
     def _safe_float(val):
         try:
             # Handle Polish format: dots as thousands, comma as decimal
             clean = str(val).replace('.', '').replace(',', '.')
+            return float(clean)
+        except (ValueError, TypeError):
+            return 0.0
+
+    @staticmethod
+    def _safe_float_plain(val):
+        """Parse a plain number (not Polish money format). Accepts both '.' and ',' as decimal."""
+        try:
+            clean = str(val).replace(',', '.')
             return float(clean)
         except (ValueError, TypeError):
             return 0.0
