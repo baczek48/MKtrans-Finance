@@ -1799,6 +1799,9 @@ class MKtransApp:
         yearly_chorobowe = 0
         yearly_urlop_by_person = {}
         yearly_chorobowe_by_person = {}
+        # Track per person per month: {name: {month_num: days}}
+        urlop_by_person_month = {}
+        chorobowe_by_person_month = {}
 
         for m in range(1, 13):
             month_id = f"{year}-{m:02d}"
@@ -1812,8 +1815,10 @@ class MKtransApp:
             yearly_chorobowe += s['chorobowe_days']
             for name, days in s['urlop_by_person'].items():
                 yearly_urlop_by_person[name] = yearly_urlop_by_person.get(name, 0) + days
+                urlop_by_person_month.setdefault(name, {})[m] = days
             for name, days in s['chorobowe_by_person'].items():
                 yearly_chorobowe_by_person[name] = yearly_chorobowe_by_person.get(name, 0) + days
+                chorobowe_by_person_month.setdefault(name, {})[m] = days
 
         yearly_monthly_costs = yearly_standard + yearly_fuel + yearly_repairs + yearly_other
         annual_total = db.get_annual_costs_total(year)
@@ -1875,21 +1880,36 @@ class MKtransApp:
         leave_frame.pack(fill='x')
         tk.Label(leave_frame, text=f'Urlop w {year}: {yearly_urlop} dni    |    '
                  f'Chorobowe w {year}: {yearly_chorobowe} dni',
-                 bg=CARD, fg=LABEL_FG, font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(0, 6))
+                 bg=CARD, fg=LABEL_FG, font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(0, 8))
 
-        # Per-person breakdown
+        # Per-person breakdown with monthly details
         all_persons = sorted(set(list(yearly_urlop_by_person.keys()) + list(yearly_chorobowe_by_person.keys())))
         if all_persons:
             for person in all_persons:
+                # Person header
                 u_days = yearly_urlop_by_person.get(person, 0)
                 c_days = yearly_chorobowe_by_person.get(person, 0)
-                parts = []
+                total_parts = []
                 if u_days > 0:
-                    parts.append(f'urlop: {u_days} dni')
+                    total_parts.append(f'urlop: {u_days} dni')
                 if c_days > 0:
-                    parts.append(f'chorobowe: {c_days} dni')
-                tk.Label(leave_frame, text=f'  {person}: {", ".join(parts)}',
-                         bg=CARD, fg=LABEL_FG, font=('Segoe UI', 9)).pack(anchor='w')
+                    total_parts.append(f'chorobowe: {c_days} dni')
+                tk.Label(leave_frame, text=f'{person}  —  {", ".join(total_parts)}',
+                         bg=CARD, fg=PRIMARY_DARK, font=('Segoe UI', 9, 'bold')).pack(anchor='w', pady=(6, 0))
+
+                # Monthly breakdown for urlop
+                person_urlop = urlop_by_person_month.get(person, {})
+                if person_urlop:
+                    months_str = ', '.join(f'{MONTHS_PL[m - 1]}: {d} dni' for m, d in sorted(person_urlop.items()))
+                    tk.Label(leave_frame, text=f'    Urlop: {months_str}',
+                             bg=CARD, fg=LABEL_FG, font=('Segoe UI', 9)).pack(anchor='w')
+
+                # Monthly breakdown for chorobowe
+                person_chor = chorobowe_by_person_month.get(person, {})
+                if person_chor:
+                    months_str = ', '.join(f'{MONTHS_PL[m - 1]}: {d} dni' for m, d in sorted(person_chor.items()))
+                    tk.Label(leave_frame, text=f'    Chorobowe: {months_str}',
+                             bg=CARD, fg=LABEL_FG, font=('Segoe UI', 9)).pack(anchor='w')
 
     # ============================================================
     # STATS TAB 5: REPAIR STATISTICS
