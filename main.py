@@ -1558,7 +1558,7 @@ class MKtransApp:
         summaries = {}
         for m in range(1, 13):
             month_id = f"{year}-{m:02d}"
-            summaries[m] = db.get_month_summary(month_id)
+            summaries[m] = db.get_month_summary(month_id, require_accepted=True)
 
         for i, cat in enumerate(categories):
             is_total = cat in ('KOSZTY MIESIĘCZNE', 'WYNIK MIESIĄCA')
@@ -1805,7 +1805,7 @@ class MKtransApp:
 
         for m in range(1, 13):
             month_id = f"{year}-{m:02d}"
-            s = db.get_month_summary(month_id)
+            s = db.get_month_summary(month_id, require_accepted=True)
             yearly_invoices += s['invoices']
             yearly_standard += s['standard']
             yearly_fuel += s['fuel_netto']
@@ -1952,7 +1952,7 @@ class MKtransApp:
         # Get repair stats
         selected_plate = self._stats_repair_plate_var.get()
         plate_filter = None if selected_plate == 'Wszystkie' else selected_plate
-        stats = db.get_repair_stats_for_year(year, plate_filter)
+        stats = db.get_repair_stats_for_year(year, plate_filter, require_accepted=True)
 
         # Build table
         frame = tk.Frame(main, bg=BG)
@@ -2137,7 +2137,7 @@ class MKtransApp:
         # Get fuel stats
         selected_plate = self._stats_fuel_plate_var.get()
         plate_filter = None if selected_plate == 'Wszystkie' else selected_plate
-        stats = db.get_fuel_stats_for_year(year, plate_filter)
+        stats = db.get_fuel_stats_for_year(year, plate_filter, require_accepted=True)
 
         # Build table
         frame = tk.Frame(main, bg=BG)

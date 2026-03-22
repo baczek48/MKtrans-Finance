@@ -293,12 +293,16 @@ def remove_fuel_plate(plate):
     conn.close()
 
 
-def get_fuel_stats_for_year(year, plate=None):
+def get_fuel_stats_for_year(year, plate=None, require_accepted=False):
     """Get monthly fuel statistics for a given year, optionally filtered by plate."""
     conn = get_connection()
     results = {}
     for m in range(1, 13):
         month_id = f"{year}-{m:02d}"
+        if require_accepted and not is_month_accepted(month_id):
+            results[m] = {'entries': 0, 'total_liters': 0, 'km_driven': 0,
+                          'total_netto': 0, 'total_brutto': 0, 'avg_consumption': 0}
+            continue
         if plate:
             rows = conn.execute(
                 "SELECT * FROM fuel WHERE month_id = ? AND plate = ? ORDER BY date",
@@ -338,12 +342,15 @@ def get_fuel_stats_for_year(year, plate=None):
     return results
 
 
-def get_repair_stats_for_year(year, plate=None):
+def get_repair_stats_for_year(year, plate=None, require_accepted=False):
     """Get monthly repair statistics for a given year, optionally filtered by plate."""
     conn = get_connection()
     results = {}
     for m in range(1, 13):
         month_id = f"{year}-{m:02d}"
+        if require_accepted and not is_month_accepted(month_id):
+            results[m] = {'count': 0, 'total_amount': 0, 'descriptions': []}
+            continue
         if plate:
             rows = conn.execute(
                 "SELECT * FROM repairs WHERE month_id = ? AND plate = ? ORDER BY date",
@@ -535,7 +542,13 @@ def get_all_years():
     return years
 
 
-def get_month_summary(month_id):
+def get_month_summary(month_id, require_accepted=False):
+    if require_accepted and not is_month_accepted(month_id):
+        return {
+            'standard': 0, 'fuel_netto': 0, 'repairs': 0, 'other': 0,
+            'total_costs': 0, 'invoices': 0, 'urlop_days': 0, 'chorobowe_days': 0,
+            'urlop_by_person': {}, 'chorobowe_by_person': {}, 'result': 0,
+        }
     costs = get_standard_costs(month_id)
     total_standard = sum(costs.values())
 
