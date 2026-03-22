@@ -1775,8 +1775,16 @@ class MKtransApp:
         for w in self._stats_tab_yearly.winfo_children():
             w.destroy()
 
-        main = tk.Frame(self._stats_tab_yearly, bg=BG, padx=24, pady=16)
-        main.pack(fill='both', expand=True)
+        # Scrollable wrapper
+        canvas = tk.Canvas(self._stats_tab_yearly, bg=BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self._stats_tab_yearly, orient='vertical', command=canvas.yview)
+        main = tk.Frame(canvas, bg=BG, padx=24, pady=16)
+        main.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=main, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        canvas.bind_all('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
 
         tk.Label(main, text=f'Podsumowanie roku {year}', bg=BG, fg=PRIMARY_DARK,
                  font=('Segoe UI', 14, 'bold')).pack(anchor='w', pady=(0, 16))
