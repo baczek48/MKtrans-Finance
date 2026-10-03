@@ -172,6 +172,7 @@ VEHICLE_DOCS = [
     ('insurance_until', 'Ubezpieczenie'),
     ('inspection_until', 'Przegląd'),
     ('tachograph_until', 'Tachograf'),
+    ('udt_lift_until', 'UDT windy'),
 ]
 PERSON_DOCS = [
     ('adr_until', 'Uprawnienia ADR'),
@@ -194,7 +195,8 @@ def _init_registry(c):
             notes TEXT DEFAULT '',
             insurance_until TEXT DEFAULT '',
             inspection_until TEXT DEFAULT '',
-            tachograph_until TEXT DEFAULT ''
+            tachograph_until TEXT DEFAULT '',
+            udt_lift_until TEXT DEFAULT ''
         )
     """)
 
@@ -223,6 +225,16 @@ def _init_registry(c):
             PRIMARY KEY (kind, entity_id, doc_key, expiry_date, stage)
         )
     """)
+
+    # Add document columns introduced after the registry was first created
+    v_cols = [row[1] for row in c.execute("PRAGMA table_info(vehicles)").fetchall()]
+    for doc_key, _ in VEHICLE_DOCS:
+        if doc_key not in v_cols:
+            c.execute(f"ALTER TABLE vehicles ADD COLUMN {doc_key} TEXT DEFAULT ''")
+    p_cols = [row[1] for row in c.execute("PRAGMA table_info(personnel)").fetchall()]
+    for doc_key, _ in PERSON_DOCS:
+        if doc_key not in p_cols:
+            c.execute(f"ALTER TABLE personnel ADD COLUMN {doc_key} TEXT DEFAULT ''")
 
     version = c.execute("PRAGMA user_version").fetchone()[0]
     if version < 1:

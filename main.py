@@ -350,7 +350,7 @@ REGISTRY = {
         'fields': [('plate', 'Nr rejestracyjny', 130, True),
                    ('brand', 'Marka', 110, False),
                    ('model', 'Model', 110, False),
-                   ('notes', 'Uwagi', 160, False)],
+                   ('notes', 'Uwagi', 140, False)],
         'docs': db.VEHICLE_DOCS,
         'get': db.get_vehicles,
         'save': db.save_vehicle,

@@ -16,7 +16,7 @@ Aplikacja desktopowa do zarządzania kosztami firmy transportowej MKtrans.
 - **Urlop / Chorobowe** — rejestracja urlopow i zwolnien, osoba wybierana z listy personelu, automatyczne liczenie dni
 
 ### Pojazdy
-- Nr rejestracyjny, marka, model, uwagi oraz daty waznosci: Ubezpieczenie, Przeglad, Tachograf
+- Nr rejestracyjny, marka, model, uwagi oraz daty waznosci: Ubezpieczenie, Przeglad, Tachograf, UDT windy
 - Paliwo i naprawy wybieraja pojazd z tej listy
 
 ### Ostrzezenia o terminach
