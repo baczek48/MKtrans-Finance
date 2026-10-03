@@ -447,6 +447,26 @@ class MKtransApp:
     def _make_date_entry(self, parent, initial='', width=12, on_select=None):
         return DatePicker(parent, width=width, initial=initial, on_select=on_select)
 
+    def _register_wheel(self, canvas):
+        """Mouse wheel scrolls whichever registered canvas is under the cursor
+        (one global handler for all windows instead of competing bind_all calls)."""
+        if not hasattr(self, '_wheel_canvases'):
+            self._wheel_canvases = []
+            self.root.bind_all('<MouseWheel>', self._on_mouse_wheel)
+        self._wheel_canvases = [c for c in self._wheel_canvases if c.winfo_exists()]
+        self._wheel_canvases.append(canvas)
+
+    def _on_mouse_wheel(self, event):
+        try:
+            w = self.root.winfo_containing(event.x_root, event.y_root)
+        except (tk.TclError, KeyError):
+            return
+        while w is not None:
+            if w in self._wheel_canvases:
+                w.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+                return
+            w = w.master
+
     @staticmethod
     def _configure_table_cols(frame, col_widths):
         """Apply fixed column widths (in pixels) to a frame using grid columnconfigure."""
@@ -598,7 +618,7 @@ class MKtransApp:
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
-        canvas.bind_all('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
+        self._register_wheel(canvas)
 
         main = tk.Frame(scroll_frame, bg=BG)
         main.pack(fill='x', padx=24, pady=20)
@@ -1482,12 +1502,24 @@ class MKtransApp:
     def _show_stats(self):
         self._save_month()
 
+        # Already open (maybe minimized): bring it back with fresh numbers
+        existing = getattr(self, '_stats_win', None)
+        if existing is not None and existing.winfo_exists():
+            existing.deiconify()
+            existing.lift()
+            existing.focus_force()
+            self._refresh_stats()
+            return
+
+        # Independent window (own taskbar button, no grab), so it can be minimized and
+        # restored without locking the main window
         win = tk.Toplevel(self.root)
         win.title('MKtrans Finance - Statystyki roczne')
         win.geometry('1300x750')
         win.configure(bg=BG)
-        win.transient(self.root)
-        win.grab_set()
+        ico_path = os.path.join(ASSETS_DIR, 'icon.ico')
+        if os.path.exists(ico_path):
+            win.iconbitmap(ico_path)
         self._stats_win = win
 
         # --- Header with year selector ---
@@ -1827,7 +1859,7 @@ class MKtransApp:
         canvas.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side='right', fill='y')
         canvas.pack(side='left', fill='both', expand=True)
-        canvas.bind_all('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
+        self._register_wheel(canvas)
 
         tk.Label(main, text=f'Podsumowanie roku {year}', bg=BG, fg=PRIMARY_DARK,
                  font=('Segoe UI', 14, 'bold')).pack(anchor='w', pady=(0, 16))
