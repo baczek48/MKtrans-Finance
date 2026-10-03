@@ -712,6 +712,22 @@ def get_all_months():
     return [r['id'] for r in rows]
 
 
+def get_months_with_data():
+    """Months that hold anything worth opening: entries, saved standard costs or acceptance."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT id FROM months WHERE accepted = 1
+        UNION SELECT month_id FROM standard_costs
+        UNION SELECT month_id FROM fuel
+        UNION SELECT month_id FROM repairs
+        UNION SELECT month_id FROM leaves
+        UNION SELECT month_id FROM invoices
+        UNION SELECT month_id FROM other_costs
+    """).fetchall()
+    conn.close()
+    return sorted(r[0] for r in rows if r[0])
+
+
 def get_months_for_year(year):
     prefix = f"{year}-"
     conn = get_connection()

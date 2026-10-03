@@ -568,22 +568,18 @@ class MKtransApp:
         self._build_summary_tab()
 
     def _populate_months(self):
+        # Rolling window (12 months back .. 2 ahead) plus every month that already holds
+        # data, so older months never drop off the list
         now = datetime.now()
-        months = []
-        self._month_keys = []
+        keys = set()
         for i in range(-12, 3):
             y = now.year + (now.month - 1 + i) // 12
             m = (now.month - 1 + i) % 12 + 1
-            key = f"{y}-{m:02d}"
-            label = f"{MONTHS_PL[m - 1]} {y}"
-            months.append(label)
-            self._month_keys.append(key)
-        self.month_combo['values'] = months
-        current_key = self._current_month_key()
-        if current_key in self._month_keys:
-            self.month_combo.current(self._month_keys.index(current_key))
-        else:
-            self.month_combo.current(12)
+            keys.add(f"{y}-{m:02d}")
+        keys.update(db.get_months_with_data())
+        self._month_keys = sorted(keys)
+        self.month_combo['values'] = [f"{MONTHS_PL[int(k[5:7]) - 1]} {k[:4]}" for k in self._month_keys]
+        self.month_combo.current(self._month_keys.index(self._current_month_key()))
 
     def _current_month_key(self):
         now = datetime.now()
