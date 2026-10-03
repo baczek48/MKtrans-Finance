@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from datetime import datetime, date, timedelta
 import calendar as cal_mod
 from PIL import Image, ImageTk
@@ -9,6 +9,7 @@ import threading
 
 import database as db
 import mail_backup
+import pdf_report
 
 import sys
 if getattr(sys, 'frozen', False):
@@ -1554,6 +1555,10 @@ class MKtransApp:
         year_combo.pack(side='left', padx=(0, 10))
         year_combo.bind('<<ComboboxSelected>>', lambda e: self._refresh_stats())
 
+        tk.Button(right_h, text='Eksport PDF', bg='#dc2626', fg='white', activebackground='#b91c1c',
+                  font=('Segoe UI', 9, 'bold'), bd=0, padx=14, pady=4, cursor='hand2',
+                  command=self._open_pdf_export).pack(side='left', padx=(6, 0))
+
         # --- Content area with notebook ---
         self._stats_notebook = ttk.Notebook(win)
         self._stats_notebook.pack(fill='both', expand=True, padx=16, pady=(8, 16))
@@ -1587,6 +1592,83 @@ class MKtransApp:
         self._build_stats_fuel(year)
         self._build_stats_repairs(year)
         self._build_stats_yearly_summary(year)
+
+    # --- PDF export ---
+
+    def _open_pdf_export(self):
+        year = int(self._stats_year_var.get())
+        parent = self._stats_win
+
+        win = tk.Toplevel(parent)
+        win.title('Eksport PDF')
+        win.configure(bg=CARD)
+        win.resizable(False, False)
+        win.transient(parent)
+        win.grab_set()
+
+        body = tk.Frame(win, bg=CARD, padx=24, pady=18)
+        body.pack(fill='both', expand=True)
+        tk.Label(body, text=f'Raport kosztów — {year}', bg=CARD, fg=PRIMARY_DARK,
+                 font=('Segoe UI', 12, 'bold')).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 10))
+
+        scope = tk.StringVar(value='month')
+        now = datetime.now()
+        month_var = tk.StringVar(value=MONTHS_PL[now.month - 1] if year == now.year else MONTHS_PL[11])
+
+        tk.Radiobutton(body, text='Jeden miesiąc (szczegóły)', variable=scope, value='month', bg=CARD,
+                       activebackground=CARD, font=('Segoe UI', 10)).grid(row=1, column=0, sticky='w')
+        month_combo = ttk.Combobox(body, textvariable=month_var, values=MONTHS_PL, state='readonly',
+                                   width=14, font=('Segoe UI', 10))
+        month_combo.grid(row=1, column=1, sticky='w', padx=(12, 0))
+        tk.Radiobutton(body, text='Cały rok (tabela miesięcy)', variable=scope, value='year', bg=CARD,
+                       activebackground=CARD, font=('Segoe UI', 10)).grid(row=2, column=0, sticky='w', pady=(6, 0))
+        scope.trace_add('write', lambda *a: month_combo.config(
+            state='readonly' if scope.get() == 'month' else 'disabled'))
+        tk.Label(body, text='Raport roczny, tak jak statystyki, liczy tylko zaakceptowane miesiące.',
+                 bg=CARD, fg='#9ca3af', font=('Segoe UI', 8)).grid(row=3, column=0, columnspan=2,
+                                                                   sticky='w', pady=(10, 0))
+
+        def export():
+            if scope.get() == 'month':
+                month_id = f'{year}-{MONTHS_PL.index(month_var.get()) + 1:02d}'
+                default = f'MKtrans_koszty_{month_id}.pdf'
+            else:
+                default = f'MKtrans_koszty_{year}.pdf'
+            path = filedialog.asksaveasfilename(parent=win, title='Zapisz raport PDF', defaultextension='.pdf',
+                                                initialfile=default, filetypes=[('PDF', '*.pdf')])
+            if not path:
+                return
+            logo = os.path.join(ASSETS_DIR, 'logo.png')
+            try:
+                if scope.get() == 'month':
+                    std = [(k, label) for k, label, _ in STANDARD_COST_PARAMS]
+                    pdf_report.build_month_report(path, month_id, std, logo)
+                else:
+                    pdf_report.build_year_report(path, year, logo)
+            except PermissionError:
+                messagebox.showerror('Eksport PDF', 'Nie można zapisać pliku — może jest otwarty w innym '
+                                     'programie? Zamknij go i spróbuj ponownie.', parent=win)
+                return
+            except Exception as exc:
+                messagebox.showerror('Eksport PDF', f'Nie udało się utworzyć PDF:\n{exc}', parent=win)
+                return
+            win.destroy()
+            try:
+                os.startfile(path)
+            except OSError:
+                messagebox.showinfo('Eksport PDF', f'Zapisano:\n{path}', parent=parent)
+
+        buttons = tk.Frame(win, bg=CARD, padx=24)
+        buttons.pack(fill='x', pady=(0, 16))
+        tk.Button(buttons, text='Zapisz PDF', bg='#dc2626', fg='white', font=('Segoe UI', 10, 'bold'),
+                  bd=0, padx=20, pady=6, cursor='hand2', command=export).pack(side='right')
+        tk.Button(buttons, text='Anuluj', bg='#e2e8f0', fg=LABEL_FG, font=('Segoe UI', 10, 'bold'),
+                  bd=0, padx=16, pady=6, cursor='hand2', command=win.destroy).pack(side='right', padx=8)
+        win.bind('<Escape>', lambda e: win.destroy())
+        win.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - win.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f'+{max(x, 0)}+{max(y, 0)}')
 
     # --- Stats Tab 1: Monthly table ---
 

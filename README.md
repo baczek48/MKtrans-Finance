@@ -38,6 +38,7 @@ Aplikacja desktopowa do zarządzania kosztami firmy transportowej MKtrans.
 - Tabela porownawcza miesiecy w wybranym roku
 - Koszty roczne: ubezpieczenia i podatek drogowy
 - Podsumowanie roczne
+- **Eksport PDF** — raport kosztow za wybrany miesiac (szczegoly: struktura kosztow, koszty standardowe, paliwo, naprawy, koszty inne, faktury, urlopy) albo za caly rok (uproszczona tabela miesiecy + koszty roczne i wynik roczny; tylko zaakceptowane miesiace)
 
 ### Inne
 - **Akceptacja miesiaca** — blokada edycji po zatwierdzeniu (z mozliwoscia odblokowania)
@@ -52,6 +53,7 @@ Aplikacja desktopowa do zarządzania kosztami firmy transportowej MKtrans.
 - Python 3.8+
 - Pillow (do logo)
 - pyzipper (szyfrowany backup)
+- reportlab (raporty PDF)
 
 ```bash
 pip install -r requirements.txt
@@ -85,6 +87,7 @@ mktrans_finance/
 ├── main.py            # Glowna aplikacja (GUI)
 ├── database.py        # Warstwa bazy danych SQLite
 ├── mail_backup.py     # Backup na e-mail (ZIP AES-256 + SMTP)
+├── pdf_report.py      # Raporty PDF (miesiac / rok)
 ├── generate_icon.py   # Generator logo i ikony
 ├── requirements.txt   # Zależności Python
 ├── icon.ico           # Ikona aplikacji
