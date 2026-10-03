@@ -4,8 +4,11 @@ from datetime import datetime, date, timedelta
 import calendar as cal_mod
 from PIL import Image, ImageTk
 import os
+import sqlite3
+import threading
 
 import database as db
+import mail_backup
 
 import sys
 if getattr(sys, 'frozen', False):
@@ -27,7 +30,7 @@ PL_DAYS = ['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'So', 'Nd']
 class DatePicker(tk.Frame):
     """Date entry with a popup calendar in Polish."""
 
-    def __init__(self, master, width=12, initial='', on_select=None, **kw):
+    def __init__(self, master, width=12, initial='', on_select=None, allow_empty=False, **kw):
         super().__init__(master, bg=kw.get('bg', '#ffffff'))
         self._on_select = on_select
         self._date = date.today()
@@ -50,7 +53,10 @@ class DatePicker(tk.Frame):
                 self._date = datetime.strptime(initial, '%Y-%m-%d').date()
             except (ValueError, TypeError):
                 pass
-        self._var.set(self._date.strftime('%Y-%m-%d'))
+        if allow_empty and not initial:
+            self._var.set('')
+        else:
+            self._var.set(self._date.strftime('%Y-%m-%d'))
 
     def get(self):
         return self._var.get()
@@ -323,6 +329,47 @@ LEAVE_COLS = [('Typ', 110), ('Imię i nazwisko', 170), ('Data od', 130),
 INVOICE_COLS = [('Data', 130), ('Nr faktury', 170), ('Kwota (PLN)', 120),
                 ('Termin', 110), ('Status', 140), ('Zapłacona', 80), ('', 40)]
 
+# Registry sections (Personel / Pojazdy): text fields (key, label, width, required)
+# followed by expiry-date documents from database.PERSON_DOCS / VEHICLE_DOCS
+REGISTRY = {
+    'person': {
+        'title': 'Personel',
+        'noun': 'osobę',
+        'fields': [('name', 'Imię i nazwisko', 190, True),
+                   ('position', 'Stanowisko', 130, False),
+                   ('phone', 'Telefon', 110, False)],
+        'docs': db.PERSON_DOCS,
+        'get': db.get_personnel,
+        'save': db.save_person,
+        'delete': db.delete_person,
+        'duplicate': 'Osoba o tym imieniu i nazwisku już istnieje.',
+    },
+    'vehicle': {
+        'title': 'Pojazdy',
+        'noun': 'pojazd',
+        'fields': [('plate', 'Nr rejestracyjny', 130, True),
+                   ('brand', 'Marka', 110, False),
+                   ('model', 'Model', 110, False),
+                   ('notes', 'Uwagi', 160, False)],
+        'docs': db.VEHICLE_DOCS,
+        'get': db.get_vehicles,
+        'save': db.save_vehicle,
+        'delete': db.delete_vehicle,
+        'duplicate': 'Pojazd o tym numerze rejestracyjnym już istnieje.',
+    },
+}
+REGISTRY_DOC_COL = 135
+REGISTRY_ACTION_COL = 130
+
+# Expiry status colors: stage -> (fg, bg)
+EXPIRY_COLORS = {
+    'expired': ('white', RED),
+    'week': ('white', '#d97706'),
+    'month': ('#92400e', '#fef3c7'),
+    None: (GREEN, CARD),
+    'invalid': (RED, CARD),
+}
+
 
 class MKtransApp:
     def __init__(self, root):
@@ -357,15 +404,24 @@ class MKtransApp:
         self.invoice_rows = []
         self.other_cost_rows = []
 
+        # Expiry warnings already shown in a popup this session (keys)
+        self._warnings_popped = set()
+        self._warn_popup = None
+
         self._build_styles()
         self._build_ui()
         self._load_month()
+        self._refresh_warnings()
 
         # Auto-save every 60 seconds
         self._auto_save_loop()
+        self.root.after(400, self._maybe_show_warnings_popup)
 
     def _auto_save_loop(self):
         self._save_month()
+        # Stages move with the calendar (e.g. 30 -> 7 days) while the app stays open
+        self._refresh_warnings()
+        self._maybe_show_warnings_popup()
         self.root.after(60000, self._auto_save_loop)
 
     def _build_styles(self):
@@ -376,6 +432,12 @@ class MKtransApp:
                         background='#e2e8f0', foreground=LABEL_FG)
         style.map('TNotebook.Tab',
                   background=[('selected', PRIMARY)],
+                  foreground=[('selected', 'white')])
+        style.configure('Sub.TNotebook', background=BG, borderwidth=0)
+        style.configure('Sub.TNotebook.Tab', font=('Segoe UI', 10, 'bold'), padding=[18, 6],
+                        background='#e2e8f0', foreground=LABEL_FG)
+        style.map('Sub.TNotebook.Tab',
+                  background=[('selected', PRIMARY_DARK)],
                   foreground=[('selected', 'white')])
 
     # ============================================================
@@ -451,11 +513,25 @@ class MKtransApp:
                                     cursor='hand2', command=self._show_stats)
         self.btn_stats.pack(side='left', padx=3)
 
+        self._mail_icon = self._envelope_icon()
+        self.btn_mail = tk.Button(right, text=' Backup', image=self._mail_icon, compound='left',
+                                  bg='#0891b2', fg='white', activebackground='#0e7490',
+                                  font=('Segoe UI', 9, 'bold'), bd=0, padx=14, pady=5,
+                                  cursor='hand2', command=self._send_backup)
+        self.btn_mail.pack(side='left', padx=(12, 0))
+        tk.Button(right, text='\u2699', bg='#0e7490', fg='white', font=('Segoe UI', 10, 'bold'),
+                  bd=0, padx=8, pady=3, cursor='hand2',
+                  command=self._open_mail_settings).pack(side='left', padx=(1, 0))
+
         # --- Locked bar ---
         self.locked_bar = tk.Frame(self.root, bg='#fef3c7', height=32)
         self.locked_label = tk.Label(self.locked_bar, text='Miesiąc zaakceptowany - tryb tylko do odczytu',
                                      bg='#fef3c7', fg='#92400e', font=('Segoe UI', 9, 'bold'))
         self.locked_label.pack(pady=6)
+
+        # --- Expiry warnings bar (filled by _refresh_warnings) ---
+        self.warn_bar = tk.Frame(self.root, bg='#fff7ed', bd=1, relief='solid',
+                                 highlightbackground='#fdba74')
 
         # --- Notebook (tabs) ---
         self.notebook = ttk.Notebook(self.root)
@@ -465,9 +541,23 @@ class MKtransApp:
         self.notebook.add(self.tab_costs, text='  Koszty stałe  ')
         self._build_costs_tab()
 
-        self.tab_leave = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(self.tab_leave, text='  Urlop / Chorobowe  ')
+        # Personel: list of people + Urlop / Chorobowe as a sub-section
+        self.tab_personnel = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(self.tab_personnel, text='  Personel  ')
+        self.personnel_notebook = ttk.Notebook(self.tab_personnel, style='Sub.TNotebook')
+        self.personnel_notebook.pack(fill='both', expand=True, padx=8, pady=(8, 0))
+
+        self.tab_person_list = tk.Frame(self.personnel_notebook, bg=BG)
+        self.personnel_notebook.add(self.tab_person_list, text='  Lista personelu  ')
+        self._build_registry_tab('person', self.tab_person_list)
+
+        self.tab_leave = tk.Frame(self.personnel_notebook, bg=BG)
+        self.personnel_notebook.add(self.tab_leave, text='  Urlop / Chorobowe  ')
         self._build_leave_tab()
+
+        self.tab_vehicles = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(self.tab_vehicles, text='  Pojazdy  ')
+        self._build_registry_tab('vehicle', self.tab_vehicles)
 
         self.tab_invoices = tk.Frame(self.notebook, bg=BG)
         self.notebook.add(self.tab_invoices, text='  Faktury  ')
@@ -556,7 +646,6 @@ class MKtransApp:
                              font=('Segoe UI', 11, 'bold'), fg=PRIMARY_DARK, padx=20, pady=10)
         lf2.pack(fill='x', pady=(0, 16))
 
-        # Top bar: add fuel + plate management
         fuel_top = tk.Frame(lf2, bg=CARD)
         fuel_top.pack(fill='x', pady=(0, 8))
 
@@ -565,27 +654,8 @@ class MKtransApp:
                                        cursor='hand2', command=self._add_fuel_row)
         self.btn_add_fuel.pack(side='left')
 
-        # Plate management (right side)
-        plate_mgmt = tk.Frame(fuel_top, bg=CARD)
-        plate_mgmt.pack(side='right')
-
-        tk.Label(plate_mgmt, text='Zarządzaj nr rej.:', bg=CARD, fg=LABEL_FG,
-                 font=('Segoe UI', 8)).pack(side='left', padx=(0, 4))
-
-        self._new_plate_var = tk.StringVar()
-        self._new_plate_entry = tk.Entry(plate_mgmt, textvariable=self._new_plate_var, width=12,
-                                          font=('Segoe UI', 9), bd=1, relief='solid')
-        self._new_plate_entry.pack(side='left', padx=2)
-
-        self.btn_add_plate = tk.Button(plate_mgmt, text='+ Dodaj', bg='#d1fae5', fg=GREEN,
-                                        font=('Segoe UI', 8, 'bold'), bd=0, padx=8, pady=2,
-                                        cursor='hand2', command=self._add_fuel_plate)
-        self.btn_add_plate.pack(side='left', padx=2)
-
-        self.btn_remove_plate = tk.Button(plate_mgmt, text='- Usuń', bg='#fee2e2', fg=RED,
-                                           font=('Segoe UI', 8, 'bold'), bd=0, padx=8, pady=2,
-                                           cursor='hand2', command=self._remove_fuel_plate)
-        self.btn_remove_plate.pack(side='left', padx=2)
+        tk.Label(fuel_top, text='Pojazdy dodajesz w zakładce „Pojazdy”', bg=CARD,
+                 fg='#9ca3af', font=('Segoe UI', 8)).pack(side='right')
 
         fh = tk.Frame(lf2, bg='#f1f5f9')
         fh.pack(fill='x')
@@ -712,27 +782,8 @@ class MKtransApp:
                                         cursor='hand2', command=self._add_leave_row)
         self.btn_add_leave.pack(side='left')
 
-        # Employee management
-        emp_mgmt = tk.Frame(top_bar, bg=CARD)
-        emp_mgmt.pack(side='right')
-
-        tk.Label(emp_mgmt, text='Zarządzaj osobami:', bg=CARD, fg=LABEL_FG,
-                 font=('Segoe UI', 8)).pack(side='left', padx=(0, 4))
-
-        self._new_emp_var = tk.StringVar()
-        self._new_emp_entry = tk.Entry(emp_mgmt, textvariable=self._new_emp_var, width=16,
-                                        font=('Segoe UI', 9), bd=1, relief='solid')
-        self._new_emp_entry.pack(side='left', padx=2)
-
-        self.btn_add_emp = tk.Button(emp_mgmt, text='+ Dodaj', bg='#d1fae5', fg=GREEN,
-                                      font=('Segoe UI', 8, 'bold'), bd=0, padx=8, pady=2,
-                                      cursor='hand2', command=self._add_employee)
-        self.btn_add_emp.pack(side='left', padx=2)
-
-        self.btn_remove_emp = tk.Button(emp_mgmt, text='- Usuń', bg='#fee2e2', fg=RED,
-                                         font=('Segoe UI', 8, 'bold'), bd=0, padx=8, pady=2,
-                                         cursor='hand2', command=self._remove_employee)
-        self.btn_remove_emp.pack(side='left', padx=2)
+        tk.Label(top_bar, text='Osoby dodajesz w podzakładce „Lista personelu”', bg=CARD,
+                 fg='#9ca3af', font=('Segoe UI', 8)).pack(side='right')
 
         lh = tk.Frame(card, bg='#f1f5f9')
         lh.pack(fill='x')
@@ -843,9 +894,9 @@ class MKtransApp:
         row.pack(fill='x', pady=2)
         self._configure_table_cols(row, [w for _, w in FUEL_COLS])
 
-        plates = db.get_fuel_plates()
         plate_var = tk.StringVar(value=d.get('plate', ''))
-        plate_combo = ttk.Combobox(row, textvariable=plate_var, values=plates,
+        plate_combo = ttk.Combobox(row, textvariable=plate_var, state='readonly',
+                                    values=self._choices(db.get_vehicle_plates(), plate_var.get()),
                                     width=14, font=('Segoe UI', 9))
         plate_combo.grid(row=0, column=0, padx=3, sticky='w')
 
@@ -890,9 +941,9 @@ class MKtransApp:
         row.pack(fill='x', pady=2)
         self._configure_table_cols(row, [w for _, w in REPAIR_COLS])
 
-        plates = db.get_fuel_plates()
         plate_var = tk.StringVar(value=d.get('plate', ''))
-        plate_e = ttk.Combobox(row, textvariable=plate_var, values=plates,
+        plate_e = ttk.Combobox(row, textvariable=plate_var, state='readonly',
+                                values=self._choices(db.get_vehicle_plates(), plate_var.get()),
                                 width=14, font=('Segoe UI', 9))
         plate_e.grid(row=0, column=0, padx=3, sticky='w')
 
@@ -938,9 +989,9 @@ class MKtransApp:
                                    state='readonly', width=10, font=('Segoe UI', 9))
         type_combo.grid(row=0, column=0, padx=3, sticky='w')
 
-        employees = db.get_employees()
         name_var = tk.StringVar(value=d.get('name', ''))
-        name_e = ttk.Combobox(row, textvariable=name_var, values=employees,
+        name_e = ttk.Combobox(row, textvariable=name_var, state='readonly',
+                               values=self._choices(db.get_personnel_names(), name_var.get()),
                                width=18, font=('Segoe UI', 9))
         name_e.grid(row=0, column=1, padx=3, sticky='w')
 
@@ -1392,20 +1443,20 @@ class MKtransApp:
         for r in self.fuel_rows:
             for k in ['liters', 'odometer', 'netto', 'brutto']:
                 r[k].config(state=state)
-            r['plate'].config(state='disabled' if state == 'disabled' else 'normal')
+            r['plate'].config(state='disabled' if state == 'disabled' else 'readonly')
             r['date'].config(state=state)
             r['del_btn'].config(state=state)
 
         for r in self.repair_rows:
             for k in ['amount', 'odometer']:
                 r[k].config(state=state)
-            r['plate'].config(state='disabled' if state == 'disabled' else 'normal')
+            r['plate'].config(state='disabled' if state == 'disabled' else 'readonly')
             r['description'].config(state=state)
             r['date'].config(state=state)
             r['del_btn'].config(state=state)
 
         for r in self.leave_rows:
-            r['name_combo'].config(state='disabled' if state == 'disabled' else 'normal')
+            r['name_combo'].config(state='disabled' if state == 'disabled' else 'readonly')
             r['date_from'].config(state=state)
             r['date_to'].config(state=state)
             r['type_combo'].config(state='disabled' if state == 'disabled' else 'readonly')
@@ -1425,12 +1476,8 @@ class MKtransApp:
 
         btn_state = 'disabled' if state == 'disabled' else 'normal'
         for btn in [self.btn_add_fuel, self.btn_add_repair, self.btn_add_leave,
-                    self.btn_add_invoice, self.btn_set_defaults, self.btn_add_other_cost,
-                    self.btn_add_plate, self.btn_remove_plate,
-                    self.btn_add_emp, self.btn_remove_emp]:
+                    self.btn_add_invoice, self.btn_set_defaults, self.btn_add_other_cost]:
             btn.config(state=btn_state)
-        self._new_plate_entry.config(state=state)
-        self._new_emp_entry.config(state=state)
 
     # ============================================================
     # STATISTICS
@@ -1935,7 +1982,7 @@ class MKtransApp:
         tk.Label(plate_frame, text='Pojazd:', bg=BG, fg=LABEL_FG,
                  font=('Segoe UI', 10)).pack(side='left', padx=(0, 6))
 
-        plates = db.get_fuel_plates()
+        plates = db.get_all_plates()
         all_options = ['Wszystkie'] + plates
         prev_selection = getattr(self, '_stats_repair_plate_var', None)
         prev_value = prev_selection.get() if prev_selection else 'Wszystkie'
@@ -2044,56 +2091,489 @@ class MKtransApp:
                      font=('Segoe UI', 9)).pack(anchor='w')
 
     # ============================================================
-    # FUEL PLATE MANAGEMENT
+    # REGISTRY: PERSONEL / POJAZDY
     # ============================================================
 
-    def _add_fuel_plate(self):
-        plate = self._new_plate_var.get().strip().upper()
-        if not plate:
+    @staticmethod
+    def _choices(options, current):
+        """Combobox values from the registry; a historical value that is no longer
+        in the registry stays selectable so past entries display unchanged."""
+        if current and current not in options:
+            return options + [current]
+        return options
+
+    def _build_registry_tab(self, kind, parent):
+        cfg = REGISTRY[kind]
+        inner = tk.Frame(parent, bg=BG, padx=24, pady=20)
+        inner.pack(fill='both', expand=True)
+
+        card = tk.Frame(inner, bg=CARD, bd=1, relief='solid', highlightbackground=BORDER, padx=20, pady=16)
+        card.pack(fill='x')
+
+        top_bar = tk.Frame(card, bg=CARD)
+        top_bar.pack(fill='x', pady=(0, 8))
+        tk.Button(top_bar, text=f'+ Dodaj {cfg["noun"]}', bg='#e0e7ff', fg=PRIMARY,
+                  font=('Segoe UI', 9, 'bold'), bd=0, padx=12, pady=4, cursor='hand2',
+                  command=lambda: self._open_registry_dialog(kind)).pack(side='left')
+        tk.Label(top_bar, text=f'Ostrzeżenie {db.WARN_MONTH_DAYS} i {db.WARN_WEEK_DAYS} dni przed '
+                 f'upływem ważności', bg=CARD, fg='#9ca3af', font=('Segoe UI', 8)).pack(side='right')
+
+        widths = ([w for _, _, w, _ in cfg['fields']] +
+                  [REGISTRY_DOC_COL] * len(cfg['docs']) + [REGISTRY_ACTION_COL])
+        header = tk.Frame(card, bg='#f1f5f9')
+        header.pack(fill='x')
+        self._configure_table_cols(header, widths)
+        titles = [label for _, label, _, _ in cfg['fields']] + [label for _, label in cfg['docs']] + ['']
+        for i, text in enumerate(titles):
+            tk.Label(header, text=text, bg='#f1f5f9', fg=LABEL_FG,
+                     font=('Segoe UI', 8, 'bold'), anchor='w').grid(row=0, column=i, padx=3, pady=5, sticky='w')
+
+        container = tk.Frame(card, bg=CARD)
+        container.pack(fill='x')
+        setattr(self, f'_{kind}_container', container)
+        setattr(self, f'_{kind}_widths', widths)
+        self._refresh_registry_table(kind)
+
+    def _refresh_registry_table(self, kind):
+        cfg = REGISTRY[kind]
+        container = getattr(self, f'_{kind}_container')
+        widths = getattr(self, f'_{kind}_widths')
+        for w in container.winfo_children():
+            w.destroy()
+
+        items = cfg['get']()
+        if not items:
+            tk.Label(container, text=f'Brak wpisów — kliknij „+ Dodaj {cfg["noun"]}”.', bg=CARD,
+                     fg='#9ca3af', font=('Segoe UI', 9)).pack(anchor='w', pady=8)
             return
-        db.add_fuel_plate(plate)
-        self._new_plate_var.set('')
-        self._refresh_fuel_plate_combos()
 
-    def _remove_fuel_plate(self):
-        plate = self._new_plate_var.get().strip().upper()
-        if not plate:
+        for item in items:
+            row = tk.Frame(container, bg=CARD)
+            row.pack(fill='x', pady=2)
+            self._configure_table_cols(row, widths)
+            col = 0
+            for key, _, _, required in cfg['fields']:
+                tk.Label(row, text=item.get(key) or '—', bg=CARD,
+                         fg=PRIMARY_DARK if required else LABEL_FG,
+                         font=('Segoe UI', 9, 'bold' if required else ''),
+                         anchor='w').grid(row=0, column=col, padx=3, sticky='w')
+                col += 1
+            for doc_key, _ in cfg['docs']:
+                text, fg, bg = self._expiry_cell(item.get(doc_key) or '')
+                tk.Label(row, text=text, bg=bg, fg=fg, font=('Segoe UI', 8, 'bold'),
+                         padx=4, anchor='w').grid(row=0, column=col, padx=3, sticky='w')
+                col += 1
+            actions = tk.Frame(row, bg=CARD)
+            actions.grid(row=0, column=col, padx=3, sticky='w')
+            tk.Button(actions, text='Edytuj', bg='#e0e7ff', fg=PRIMARY, font=('Segoe UI', 8, 'bold'),
+                      bd=0, padx=8, pady=2, cursor='hand2',
+                      command=lambda it=item: self._open_registry_dialog(kind, it)).pack(side='left', padx=2)
+            tk.Button(actions, text='Usuń', bg='#fee2e2', fg=RED, font=('Segoe UI', 8, 'bold'),
+                      bd=0, padx=8, pady=2, cursor='hand2',
+                      command=lambda it=item: self._delete_registry_item(kind, it)).pack(side='left', padx=2)
+
+    @staticmethod
+    def _expiry_cell(expiry):
+        """(text, fg, bg) for an expiry date shown in the registry table."""
+        if not expiry:
+            return '—', '#9ca3af', CARD
+        stage, days_left = db.expiry_stage(expiry)
+        fg, bg = EXPIRY_COLORS.get(stage, (LABEL_FG, CARD))
+        if stage == 'invalid':
+            return f'{expiry} (błędna data)', fg, bg
+        if stage == 'expired':
+            return f'{expiry} (wygasło)', fg, bg
+        return f'{expiry} ({days_left}d)', fg, bg
+
+    def _open_registry_dialog(self, kind, item=None):
+        cfg = REGISTRY[kind]
+        item = item or {}
+        editing = 'id' in item
+
+        win = tk.Toplevel(self.root)
+        win.title(f'{cfg["title"]} - {"edycja" if editing else "nowy wpis"}')
+        win.configure(bg=CARD)
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        body = tk.Frame(win, bg=CARD, padx=24, pady=18)
+        body.pack(fill='both', expand=True)
+
+        tk.Label(body, text='Dane', bg=CARD, fg=PRIMARY_DARK,
+                 font=('Segoe UI', 11, 'bold')).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 6))
+        row_i = 1
+        text_vars = {}
+        first_entry = None
+        for key, label, _, required in cfg['fields']:
+            tk.Label(body, text=label + (' *' if required else ''), bg=CARD, fg=LABEL_FG,
+                     font=('Segoe UI', 10)).grid(row=row_i, column=0, sticky='w', pady=3)
+            var = tk.StringVar(value=item.get(key) or '')
+            e = tk.Entry(body, textvariable=var, width=30, font=('Segoe UI', 10), bd=1, relief='solid')
+            e.grid(row=row_i, column=1, sticky='w', pady=3, padx=(12, 0))
+            first_entry = first_entry or e
+            text_vars[key] = var
+            row_i += 1
+
+        tk.Label(body, text='Daty ważności (puste = nie dotyczy)', bg=CARD, fg=PRIMARY_DARK,
+                 font=('Segoe UI', 11, 'bold')).grid(row=row_i, column=0, columnspan=2, sticky='w', pady=(14, 6))
+        row_i += 1
+        pickers = {}
+        for doc_key, doc_label in cfg['docs']:
+            tk.Label(body, text=doc_label, bg=CARD, fg=LABEL_FG,
+                     font=('Segoe UI', 10)).grid(row=row_i, column=0, sticky='w', pady=3)
+            dp = DatePicker(body, width=14, initial=item.get(doc_key) or '', allow_empty=True)
+            dp.grid(row=row_i, column=1, sticky='w', pady=3, padx=(12, 0))
+            pickers[doc_key] = dp
+            row_i += 1
+        tk.Label(body, text='Format daty: RRRR-MM-DD. Aby usunąć datę, wyczyść pole.', bg=CARD,
+                 fg='#9ca3af', font=('Segoe UI', 8)).grid(row=row_i, column=0, columnspan=2, sticky='w', pady=(4, 0))
+
+        def on_save():
+            data = {k: v.get().strip() for k, v in text_vars.items()}
+            if 'plate' in data:
+                data['plate'] = data['plate'].upper()
+            for key, label, _, required in cfg['fields']:
+                if required and not data[key]:
+                    messagebox.showwarning(cfg['title'], f'Pole „{label}” jest wymagane.', parent=win)
+                    return
+            for doc_key, doc_label in cfg['docs']:
+                val = pickers[doc_key].get().strip()
+                if val and db.expiry_stage(val)[0] == 'invalid':
+                    messagebox.showwarning(cfg['title'],
+                                           f'„{doc_label}”: niepoprawna data „{val}”.\n'
+                                           'Użyj formatu RRRR-MM-DD lub zostaw puste.', parent=win)
+                    return
+                data[doc_key] = val
+            try:
+                cfg['save'](data, item.get('id'))
+            except sqlite3.IntegrityError:
+                messagebox.showwarning(cfg['title'], cfg['duplicate'], parent=win)
+                return
+            win.destroy()
+            self._on_registry_changed(kind)
+
+        buttons = tk.Frame(win, bg=CARD, padx=24, pady=(0))
+        buttons.pack(fill='x', pady=(0, 16))
+        tk.Button(buttons, text='Zapisz', bg=GREEN, fg='white', font=('Segoe UI', 10, 'bold'),
+                  bd=0, padx=20, pady=6, cursor='hand2', command=on_save).pack(side='right')
+        tk.Button(buttons, text='Anuluj', bg='#e2e8f0', fg=LABEL_FG, font=('Segoe UI', 10, 'bold'),
+                  bd=0, padx=16, pady=6, cursor='hand2', command=win.destroy).pack(side='right', padx=8)
+
+        win.bind('<Escape>', lambda e: win.destroy())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f'+{max(x, 0)}+{max(y, 0)}')
+        if first_entry:
+            first_entry.focus_set()
+
+    def _delete_registry_item(self, kind, item):
+        cfg = REGISTRY[kind]
+        label = item[cfg['fields'][0][0]]
+        if not messagebox.askyesno(cfg['title'],
+                                   f'Usunąć „{label}” z listy?\n\n'
+                                   'Wcześniejsze wpisy (paliwo, naprawy, urlopy) pozostaną bez zmian.'):
             return
-        db.remove_fuel_plate(plate)
-        self._new_plate_var.set('')
-        self._refresh_fuel_plate_combos()
+        cfg['delete'](item['id'])
+        self._on_registry_changed(kind)
 
-    def _refresh_fuel_plate_combos(self):
-        plates = db.get_fuel_plates()
-        for r in self.fuel_rows:
-            r['plate']['values'] = plates
-        for r in self.repair_rows:
-            r['plate']['values'] = plates
+    def _on_registry_changed(self, kind):
+        self._refresh_registry_table(kind)
+        self._refresh_registry_combos()
+        self._refresh_warnings()
 
-    # ============================================================
-    # EMPLOYEE MANAGEMENT
-    # ============================================================
-
-    def _add_employee(self):
-        name = self._new_emp_var.get().strip()
-        if not name:
-            return
-        db.add_employee(name)
-        self._new_emp_var.set('')
-        self._refresh_employee_combos()
-
-    def _remove_employee(self):
-        name = self._new_emp_var.get().strip()
-        if not name:
-            return
-        db.remove_employee(name)
-        self._new_emp_var.set('')
-        self._refresh_employee_combos()
-
-    def _refresh_employee_combos(self):
-        employees = db.get_employees()
+    def _refresh_registry_combos(self):
+        plates = db.get_vehicle_plates()
+        for r in self.fuel_rows + self.repair_rows:
+            r['plate']['values'] = self._choices(plates, r['plate_var'].get())
+        names = db.get_personnel_names()
         for r in self.leave_rows:
-            r['name_combo']['values'] = employees
+            r['name_combo']['values'] = self._choices(names, r['name'].get())
+
+    # ============================================================
+    # EXPIRY WARNINGS (main window)
+    # ============================================================
+
+    @staticmethod
+    def _warning_key(w):
+        return (w['kind'], w['entity_id'], w['doc_key'], w['expiry_date'], w['stage'])
+
+    @staticmethod
+    def _warning_text(w):
+        who = ('Pojazd ' if w['kind'] == 'vehicle' else '') + w['who']
+        d = w['days_left']
+        if w['stage'] == 'expired':
+            when = f'WYGASŁO {-d} dni temu' if d < -1 else 'WYGASŁO wczoraj'
+        elif d == 0:
+            when = 'wygasa DZISIAJ'
+        elif d == 1:
+            when = 'wygasa jutro'
+        else:
+            when = f'wygasa za {d} dni'
+        return f'{who} — {w["doc_label"]}: {when} ({w["expiry_date"]})'
+
+    def _refresh_warnings(self):
+        self._pending_warnings = db.get_pending_warnings()
+        for w in self.warn_bar.winfo_children():
+            w.destroy()
+        if not self._pending_warnings:
+            self.warn_bar.pack_forget()
+            return
+
+        top = tk.Frame(self.warn_bar, bg='#fff7ed')
+        top.pack(fill='x', padx=12, pady=(6, 2))
+        tk.Label(top, text=f'Terminy do akceptacji ({len(self._pending_warnings)})', bg='#fff7ed',
+                 fg='#9a3412', font=('Segoe UI', 10, 'bold')).pack(side='left')
+        tk.Button(top, text='Akceptuj wszystkie', bg='#ea580c', fg='white', font=('Segoe UI', 8, 'bold'),
+                  bd=0, padx=10, pady=2, cursor='hand2',
+                  command=lambda: self._ack(self._pending_warnings)).pack(side='right')
+
+        MAX_ROWS = 5
+        for w in self._pending_warnings[:MAX_ROWS]:
+            fg, bg = EXPIRY_COLORS[w['stage']]
+            row = tk.Frame(self.warn_bar, bg='#fff7ed')
+            row.pack(fill='x', padx=12, pady=1)
+            tk.Label(row, text=self._warning_text(w), bg=bg, fg=fg, font=('Segoe UI', 9, 'bold'),
+                     padx=6, anchor='w').pack(side='left')
+            tk.Button(row, text='Akceptuj', bg='#fed7aa', fg='#9a3412', font=('Segoe UI', 8, 'bold'),
+                      bd=0, padx=8, pady=1, cursor='hand2',
+                      command=lambda x=w: self._ack([x])).pack(side='left', padx=8)
+        hidden = len(self._pending_warnings) - MAX_ROWS
+        if hidden > 0:
+            tk.Label(self.warn_bar, text=f'… i jeszcze {hidden} (szczegóły w zakładkach Personel / Pojazdy)',
+                     bg='#fff7ed', fg='#9a3412', font=('Segoe UI', 8)).pack(anchor='w', padx=12)
+        tk.Frame(self.warn_bar, bg='#fff7ed', height=4).pack()
+        self.warn_bar.pack(fill='x', padx=16, pady=(8, 0), before=self.notebook)
+
+    def _ack(self, warnings):
+        db.ack_warnings(list(warnings))
+        self._refresh_warnings()
+
+    def _maybe_show_warnings_popup(self):
+        """Modal notice for warnings not yet shown this session; 'Akceptuję' acknowledges them."""
+        if self._warn_popup is not None and self._warn_popup.winfo_exists():
+            return
+        fresh = [w for w in getattr(self, '_pending_warnings', [])
+                 if self._warning_key(w) not in self._warnings_popped]
+        if not fresh:
+            return
+        pending = list(self._pending_warnings)
+        self._warnings_popped.update(self._warning_key(w) for w in pending)
+
+        win = tk.Toplevel(self.root)
+        self._warn_popup = win
+        win.title('MKtrans Finance - Terminy ważności')
+        win.configure(bg=CARD)
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        body = tk.Frame(win, bg=CARD, padx=24, pady=18)
+        body.pack(fill='both', expand=True)
+        tk.Label(body, text='Zbliżające się terminy ważności', bg=CARD, fg='#9a3412',
+                 font=('Segoe UI', 13, 'bold')).pack(anchor='w', pady=(0, 10))
+        for w in pending:
+            fg, bg = EXPIRY_COLORS[w['stage']]
+            tk.Label(body, text=self._warning_text(w), bg=bg, fg=fg, font=('Segoe UI', 10, 'bold'),
+                     padx=8, pady=3, anchor='w').pack(fill='x', pady=2)
+        tk.Label(body, text='„Akceptuję” potwierdza zapoznanie się z terminami. Kolejne przypomnienie '
+                 f'pojawi się {db.WARN_WEEK_DAYS} dni przed terminem i po jego upływie.',
+                 bg=CARD, fg='#9ca3af', font=('Segoe UI', 8), wraplength=520,
+                 justify='left').pack(anchor='w', pady=(10, 0))
+
+        def accept():
+            db.ack_warnings(pending)
+            win.destroy()
+            self._refresh_warnings()
+
+        buttons = tk.Frame(win, bg=CARD, padx=24)
+        buttons.pack(fill='x', pady=(0, 16))
+        tk.Button(buttons, text='Akceptuję', bg='#ea580c', fg='white', font=('Segoe UI', 10, 'bold'),
+                  bd=0, padx=20, pady=6, cursor='hand2', command=accept).pack(side='right')
+        tk.Button(buttons, text='Przypomnij później', bg='#e2e8f0', fg=LABEL_FG,
+                  font=('Segoe UI', 10, 'bold'), bd=0, padx=16, pady=6, cursor='hand2',
+                  command=win.destroy).pack(side='right', padx=8)
+
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f'+{max(x, 0)}+{max(y, 0)}')
+
+    # ============================================================
+    # E-MAIL BACKUP
+    # ============================================================
+
+    @staticmethod
+    def _envelope_icon():
+        """Crisp white envelope drawn at 4x and downsampled (no icon-font dependency)."""
+        from PIL import ImageDraw
+        k, w, h = 4, 18, 13
+        img = Image.new('RGBA', (w * k, h * k), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        lw = int(1.6 * k)
+        d.rectangle([lw // 2, lw // 2, w * k - lw // 2 - 1, h * k - lw // 2 - 1], outline='white', width=lw)
+        d.line([(lw, lw), (w * k // 2, int(h * k * 0.62)), (w * k - lw, lw)], fill='white', width=lw,
+               joint='curve')
+        return ImageTk.PhotoImage(img.resize((w, h), Image.LANCZOS))
+
+    def _send_backup(self):
+        settings = mail_backup.load_settings()
+        missing = mail_backup.missing_settings(settings)
+        if missing:
+            messagebox.showinfo('Backup na e-mail',
+                                'Najpierw uzupełnij ustawienia wysyłki:\n- ' + '\n- '.join(missing))
+            self._open_mail_settings(send_after_save=True)
+            return
+        self._start_backup_send(settings)
+
+    def _start_backup_send(self, settings, parent=None):
+        if getattr(self, '_backup_sending', False):
+            return
+        self._save_month()
+        self._backup_sending = True
+        self.btn_mail.config(text=' Wysyłanie…', state='disabled')
+
+        def worker():
+            try:
+                result = mail_backup.send_backup(settings)
+                self.root.after(0, done, result, None)
+            except Exception as exc:
+                self.root.after(0, done, None, exc)
+
+        def done(result, exc):
+            self._backup_sending = False
+            self.btn_mail.config(text=' Backup', state='normal')
+            if exc is not None:
+                messagebox.showerror('Backup na e-mail',
+                                     'Nie udało się wysłać backupu.\n\n' + mail_backup.describe_error(exc),
+                                     parent=parent if parent and parent.winfo_exists() else self.root)
+                return
+            name, size, recipients = result
+            messagebox.showinfo('Backup na e-mail',
+                                f'Wysłano backup {name} ({size / 1024:.0f} KB)\n'
+                                f'do: {", ".join(recipients)}\n\n'
+                                'Archiwum jest zaszyfrowane hasłem do backupu.',
+                                parent=parent if parent and parent.winfo_exists() else self.root)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_mail_settings(self, send_after_save=False):
+        settings = mail_backup.load_settings()
+
+        win = tk.Toplevel(self.root)
+        win.title('MKtrans Finance - Backup na e-mail')
+        win.configure(bg=CARD)
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        body = tk.Frame(win, bg=CARD, padx=24, pady=18)
+        body.pack(fill='both', expand=True)
+
+        row_i = [0]
+
+        def section(text):
+            tk.Label(body, text=text, bg=CARD, fg=PRIMARY_DARK, font=('Segoe UI', 11, 'bold')).grid(
+                row=row_i[0], column=0, columnspan=3, sticky='w', pady=(12 if row_i[0] else 0, 6))
+            row_i[0] += 1
+
+        def field(label, key, width=32, secret=False):
+            tk.Label(body, text=label, bg=CARD, fg=LABEL_FG, font=('Segoe UI', 10)).grid(
+                row=row_i[0], column=0, sticky='w', pady=3)
+            var = tk.StringVar(value=str(settings.get(key, '')))
+            e = tk.Entry(body, textvariable=var, width=width, font=('Segoe UI', 10), bd=1,
+                         relief='solid', show='\u2022' if secret else '')
+            e.grid(row=row_i[0], column=1, sticky='w', pady=3, padx=(12, 0))
+            if secret:
+                shown = tk.BooleanVar(value=False)
+                tk.Checkbutton(body, text='pokaż', variable=shown, bg=CARD, activebackground=CARD,
+                               font=('Segoe UI', 8),
+                               command=lambda: e.config(show='' if shown.get() else '\u2022')).grid(
+                    row=row_i[0], column=2, sticky='w', padx=4)
+            row_i[0] += 1
+            return var
+
+        def hint(text):
+            tk.Label(body, text=text, bg=CARD, fg='#9ca3af', font=('Segoe UI', 8), wraplength=460,
+                     justify='left').grid(row=row_i[0], column=0, columnspan=3, sticky='w', pady=(0, 2))
+            row_i[0] += 1
+
+        section('Odbiorca')
+        v_recipients = field('Adres e-mail', 'recipients')
+        hint('Kilka adresów oddziel przecinkiem.')
+
+        section('Skrzynka nadawcza (SMTP)')
+        v_host = field('Serwer SMTP', 'smtp_host')
+        tk.Label(body, text='Port / szyfrowanie', bg=CARD, fg=LABEL_FG, font=('Segoe UI', 10)).grid(
+            row=row_i[0], column=0, sticky='w', pady=3)
+        pf = tk.Frame(body, bg=CARD)
+        pf.grid(row=row_i[0], column=1, sticky='w', pady=3, padx=(12, 0))
+        v_port = tk.StringVar(value=str(settings.get('smtp_port', 465)))
+        tk.Entry(pf, textvariable=v_port, width=6, font=('Segoe UI', 10), bd=1, relief='solid').pack(side='left')
+        v_sec = tk.StringVar(value=settings.get('security', 'SSL'))
+        sec_combo = ttk.Combobox(pf, textvariable=v_sec, values=['SSL', 'STARTTLS'], state='readonly',
+                                 width=10, font=('Segoe UI', 9))
+        sec_combo.pack(side='left', padx=8)
+        sec_combo.bind('<<ComboboxSelected>>',
+                       lambda e: v_port.set('465' if v_sec.get() == 'SSL' else '587'))
+        row_i[0] += 1
+        v_login = field('Login (adres e-mail)', 'login')
+        v_smtp_pw = field('Hasło SMTP', 'smtp_password', secret=True)
+        v_sender = field('Nadawca (opcjonalnie)', 'sender')
+        hint('Gmail: serwer smtp.gmail.com, port 465 SSL, hasło = „hasło aplikacji” z konta Google '
+             '(Bezpieczeństwo → Weryfikacja dwuetapowa → Hasła aplikacji), nie zwykłe hasło.')
+
+        section('Szyfrowanie backupu')
+        v_zip_pw = field('Hasło do backupu', 'zip_password', secret=True)
+        hint('Backup to ZIP zaszyfrowany AES-256. Bez tego hasła nie da się go otworzyć — zapisz je '
+             'w bezpiecznym miejscu. Rozpakujesz 7-Zipem lub WinRAR-em.')
+        hint('Hasła są zapisane na tym komputerze w formie zaszyfrowanej (Windows) i nie trafiają do backupu.')
+
+        def collect():
+            try:
+                port = int(v_port.get().strip())
+            except ValueError:
+                messagebox.showwarning('Backup na e-mail', 'Port musi być liczbą (np. 465 lub 587).', parent=win)
+                return None
+            return {
+                'smtp_host': v_host.get().strip(), 'smtp_port': port, 'security': v_sec.get(),
+                'login': v_login.get().strip(), 'smtp_password': v_smtp_pw.get(),
+                'sender': v_sender.get().strip(), 'recipients': v_recipients.get().strip(),
+                'zip_password': v_zip_pw.get(),
+            }
+
+        def save(send=False):
+            new = collect()
+            if new is None:
+                return
+            mail_backup.save_settings(new)
+            if send:
+                missing = mail_backup.missing_settings(new)
+                if missing:
+                    messagebox.showwarning('Backup na e-mail',
+                                           'Uzupełnij:\n- ' + '\n- '.join(missing), parent=win)
+                    return
+                win.destroy()
+                self._start_backup_send(new)
+            else:
+                win.destroy()
+
+        buttons = tk.Frame(win, bg=CARD, padx=24)
+        buttons.pack(fill='x', pady=(0, 16))
+        tk.Button(buttons, text='Zapisz i wyślij backup', bg='#0891b2', fg='white',
+                  font=('Segoe UI', 10, 'bold'), bd=0, padx=16, pady=6, cursor='hand2',
+                  command=lambda: save(send=True)).pack(side='right')
+        tk.Button(buttons, text='Zapisz', bg=GREEN, fg='white', font=('Segoe UI', 10, 'bold'),
+                  bd=0, padx=16, pady=6, cursor='hand2', command=save).pack(side='right', padx=8)
+        tk.Button(buttons, text='Anuluj', bg='#e2e8f0', fg=LABEL_FG, font=('Segoe UI', 10, 'bold'),
+                  bd=0, padx=16, pady=6, cursor='hand2', command=win.destroy).pack(side='right')
+
+        win.bind('<Escape>', lambda e: win.destroy())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 4
+        win.geometry(f'+{max(x, 0)}+{max(y, 0)}')
 
     # ============================================================
     # STATS TAB 4: FUEL STATISTICS
@@ -2119,7 +2599,7 @@ class MKtransApp:
         tk.Label(plate_frame, text='Pojazd:', bg=BG, fg=LABEL_FG,
                  font=('Segoe UI', 10)).pack(side='left', padx=(0, 6))
 
-        plates = db.get_fuel_plates()
+        plates = db.get_all_plates()
         all_options = ['Wszystkie'] + plates
         # Preserve previous selection if it exists
         prev_selection = getattr(self, '_stats_fuel_plate_var', None)

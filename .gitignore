@@ -7,3 +7,4 @@ backups/
 *.egg-info/
 dist/
 build/
+mail_settings.json

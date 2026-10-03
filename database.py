@@ -161,8 +161,84 @@ def init_db():
         for p in ['PNT7966A', 'PNTMR28']:
             c.execute("INSERT OR IGNORE INTO fuel_plates (plate) VALUES (?)", (p,))
 
+    _init_registry(c)
+
     conn.commit()
     conn.close()
+
+
+# Document types tracked for expiry warnings: (key, label)
+VEHICLE_DOCS = [
+    ('insurance_until', 'Ubezpieczenie'),
+    ('inspection_until', 'Przegląd'),
+    ('tachograph_until', 'Tachograf'),
+]
+PERSON_DOCS = [
+    ('adr_until', 'Uprawnienia ADR'),
+    ('driver_card_until', 'Karta kierowcy'),
+    ('license_until', 'Prawo jazdy'),
+]
+
+REGISTRY_VERSION = 1
+
+
+def _init_registry(c):
+    """Vehicles / personnel registry (v1.2). Historical fuel, repairs and leaves keep
+    plain-text plate / name, so past months display exactly as before."""
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS vehicles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plate TEXT NOT NULL UNIQUE,
+            brand TEXT DEFAULT '',
+            model TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            insurance_until TEXT DEFAULT '',
+            inspection_until TEXT DEFAULT '',
+            tachograph_until TEXT DEFAULT ''
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS personnel (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            position TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            adr_until TEXT DEFAULT '',
+            driver_card_until TEXT DEFAULT '',
+            license_until TEXT DEFAULT ''
+        )
+    """)
+
+    # One row per acknowledged warning stage of a concrete expiry date.
+    # A renewed document (new expiry date) produces fresh warnings automatically.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS expiry_acks (
+            kind TEXT,
+            entity_id INTEGER,
+            doc_key TEXT,
+            expiry_date TEXT,
+            stage TEXT,
+            acked_at TEXT,
+            PRIMARY KEY (kind, entity_id, doc_key, expiry_date, stage)
+        )
+    """)
+
+    version = c.execute("PRAGMA user_version").fetchone()[0]
+    if version < 1:
+        # One-time import of everything entered before the registry existed
+        plates = {r[0] for r in c.execute("SELECT plate FROM fuel_plates")}
+        plates |= {r[0] for r in c.execute("SELECT DISTINCT plate FROM fuel")}
+        plates |= {r[0] for r in c.execute("SELECT DISTINCT plate FROM repairs")}
+        for p in sorted({x.strip() for x in plates if x and x.strip()}):
+            c.execute("INSERT OR IGNORE INTO vehicles (plate) VALUES (?)", (p,))
+
+        names = {r[0] for r in c.execute("SELECT name FROM employees")}
+        names |= {r[0] for r in c.execute("SELECT DISTINCT name FROM leaves")}
+        for n in sorted({x.strip() for x in names if x and x.strip()}):
+            c.execute("INSERT OR IGNORE INTO personnel (name) VALUES (?)", (n,))
+
+        c.execute(f"PRAGMA user_version = {REGISTRY_VERSION}")
 
 
 def ensure_month(month_id):
@@ -270,25 +346,166 @@ def save_fuel(month_id, entries):
     conn.close()
 
 
-# --- Fuel Plates ---
+# --- Vehicles ---
 
-def get_fuel_plates():
+_VEHICLE_FIELDS = ['plate', 'brand', 'model', 'notes'] + [k for k, _ in VEHICLE_DOCS]
+
+
+def get_vehicles():
     conn = get_connection()
-    rows = conn.execute("SELECT plate FROM fuel_plates ORDER BY plate").fetchall()
+    rows = conn.execute("SELECT * FROM vehicles ORDER BY plate").fetchall()
     conn.close()
-    return [r['plate'] for r in rows]
+    return [dict(r) for r in rows]
 
 
-def add_fuel_plate(plate):
+def get_vehicle_plates():
+    return [v['plate'] for v in get_vehicles()]
+
+
+def get_all_plates():
+    """Registry plates plus any plate still referenced by historical entries."""
     conn = get_connection()
-    conn.execute("INSERT OR IGNORE INTO fuel_plates (plate) VALUES (?)", (plate,))
+    plates = {r[0] for r in conn.execute("SELECT plate FROM vehicles")}
+    plates |= {r[0] for r in conn.execute("SELECT DISTINCT plate FROM fuel")}
+    plates |= {r[0] for r in conn.execute("SELECT DISTINCT plate FROM repairs")}
+    conn.close()
+    return sorted(p for p in plates if p)
+
+
+def save_vehicle(data, vehicle_id=None):
+    """Insert or update a vehicle. Raises sqlite3.IntegrityError on duplicate plate."""
+    values = [data.get(f, '') or '' for f in _VEHICLE_FIELDS]
+    conn = get_connection()
+    try:
+        if vehicle_id is None:
+            cur = conn.execute(
+                f"INSERT INTO vehicles ({', '.join(_VEHICLE_FIELDS)}) "
+                f"VALUES ({', '.join('?' * len(_VEHICLE_FIELDS))})", values)
+            vehicle_id = cur.lastrowid
+        else:
+            conn.execute(
+                f"UPDATE vehicles SET {', '.join(f + ' = ?' for f in _VEHICLE_FIELDS)} WHERE id = ?",
+                values + [vehicle_id])
+        conn.commit()
+    finally:
+        conn.close()
+    return vehicle_id
+
+
+def delete_vehicle(vehicle_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM vehicles WHERE id = ?", (vehicle_id,))
+    conn.execute("DELETE FROM expiry_acks WHERE kind = 'vehicle' AND entity_id = ?", (vehicle_id,))
     conn.commit()
     conn.close()
 
 
-def remove_fuel_plate(plate):
+# --- Personnel ---
+
+_PERSON_FIELDS = ['name', 'position', 'phone'] + [k for k, _ in PERSON_DOCS]
+
+
+def get_personnel():
     conn = get_connection()
-    conn.execute("DELETE FROM fuel_plates WHERE plate = ?", (plate,))
+    rows = conn.execute("SELECT * FROM personnel ORDER BY name").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_personnel_names():
+    return [p['name'] for p in get_personnel()]
+
+
+def save_person(data, person_id=None):
+    """Insert or update a person. Raises sqlite3.IntegrityError on duplicate name."""
+    values = [data.get(f, '') or '' for f in _PERSON_FIELDS]
+    conn = get_connection()
+    try:
+        if person_id is None:
+            cur = conn.execute(
+                f"INSERT INTO personnel ({', '.join(_PERSON_FIELDS)}) "
+                f"VALUES ({', '.join('?' * len(_PERSON_FIELDS))})", values)
+            person_id = cur.lastrowid
+        else:
+            conn.execute(
+                f"UPDATE personnel SET {', '.join(f + ' = ?' for f in _PERSON_FIELDS)} WHERE id = ?",
+                values + [person_id])
+        conn.commit()
+    finally:
+        conn.close()
+    return person_id
+
+
+def delete_person(person_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM personnel WHERE id = ?", (person_id,))
+    conn.execute("DELETE FROM expiry_acks WHERE kind = 'person' AND entity_id = ?", (person_id,))
+    conn.commit()
+    conn.close()
+
+
+# --- Expiry warnings ---
+
+WARN_MONTH_DAYS = 30
+WARN_WEEK_DAYS = 7
+
+
+def expiry_stage(expiry_str, today=None):
+    """Return (stage, days_left) for an expiry date string.
+    stage: 'expired' / 'week' / 'month' / None (no warning yet) / 'invalid'."""
+    if not expiry_str:
+        return None, None
+    try:
+        d = datetime.strptime(expiry_str, '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return 'invalid', None
+    today = today or datetime.now().date()
+    days_left = (d - today).days
+    if days_left < 0:
+        return 'expired', days_left
+    if days_left <= WARN_WEEK_DAYS:
+        return 'week', days_left
+    if days_left <= WARN_MONTH_DAYS:
+        return 'month', days_left
+    return None, days_left
+
+
+def get_pending_warnings(today=None):
+    """All expiry warnings whose current stage has not been acknowledged yet."""
+    conn = get_connection()
+    acked = {tuple(r) for r in conn.execute(
+        "SELECT kind, entity_id, doc_key, expiry_date, stage FROM expiry_acks")}
+    conn.close()
+
+    sources = [('vehicle', 'plate', get_vehicles(), VEHICLE_DOCS),
+               ('person', 'name', get_personnel(), PERSON_DOCS)]
+    warnings = []
+    for kind, label_field, items, docs in sources:
+        for item in items:
+            for doc_key, doc_label in docs:
+                expiry = item.get(doc_key) or ''
+                stage, days_left = expiry_stage(expiry, today)
+                if stage not in ('expired', 'week', 'month'):
+                    continue
+                if (kind, item['id'], doc_key, expiry, stage) in acked:
+                    continue
+                warnings.append({
+                    'kind': kind, 'entity_id': item['id'], 'who': item[label_field],
+                    'doc_key': doc_key, 'doc_label': doc_label,
+                    'expiry_date': expiry, 'stage': stage, 'days_left': days_left,
+                })
+    warnings.sort(key=lambda w: w['days_left'])
+    return warnings
+
+
+def ack_warnings(warnings):
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn = get_connection()
+    for w in warnings:
+        conn.execute(
+            "INSERT OR IGNORE INTO expiry_acks (kind, entity_id, doc_key, expiry_date, stage, acked_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (w['kind'], w['entity_id'], w['doc_key'], w['expiry_date'], w['stage'], now))
     conn.commit()
     conn.close()
 
@@ -371,29 +588,6 @@ def get_repair_stats_for_year(year, plate=None, require_accepted=False):
         }
     conn.close()
     return results
-
-
-# --- Employees ---
-
-def get_employees():
-    conn = get_connection()
-    rows = conn.execute("SELECT name FROM employees ORDER BY name").fetchall()
-    conn.close()
-    return [r['name'] for r in rows]
-
-
-def add_employee(name):
-    conn = get_connection()
-    conn.execute("INSERT OR IGNORE INTO employees (name) VALUES (?)", (name,))
-    conn.commit()
-    conn.close()
-
-
-def remove_employee(name):
-    conn = get_connection()
-    conn.execute("DELETE FROM employees WHERE name = ?", (name,))
-    conn.commit()
-    conn.close()
 
 
 # --- Other Costs ---
